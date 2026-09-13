@@ -43,6 +43,9 @@ sessions/shell-jobs/*
 # Satellite Local Config
 satellite/config.json
 
+# Temporary test artifacts
+test/tmp_*
+
 # OS Artifacts
 .DS_Store
 Thumbs.db

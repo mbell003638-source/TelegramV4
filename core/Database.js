@@ -427,7 +427,9 @@ let instance = null;
 
 function getDatabase(dbDir = path.join(__dirname, '..', 'store')) {
     if (!instance) {
-        const dbPath = path.join(dbDir, 'assistant.db');
+        const dbPath = process.env.DB_PATH
+            ? (path.isAbsolute(process.env.DB_PATH) ? process.env.DB_PATH : path.join(__dirname, '..', process.env.DB_PATH))
+            : path.join(dbDir, 'assistant.db');
         instance = new AssistantDatabase(dbPath);
     }
     return instance;

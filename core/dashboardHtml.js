@@ -202,6 +202,7 @@ function getDashboardHtml(token, chatId) {
           <div class="model-opt" data-model="claude-opus-4-6" onclick="pickGlobalModel(this)">All Opus</div>
           <div class="model-opt" data-model="claude-sonnet-4-6" onclick="pickGlobalModel(this)">All Sonnet</div>
           <div class="model-opt" data-model="claude-haiku-4-5" onclick="pickGlobalModel(this)">All Haiku</div>
+          <div class="model-opt" style="color:#a78bfa;border-top:1px solid #333;font-weight:600" onclick="enterGlobalCustomModel()">+ Custom Model...</div>
         </div>
       </div>
     </div>
@@ -970,14 +971,18 @@ async function loadAgents() {
       const color = AGENT_COLORS[a.id] || '#6b7280';
       const dot = a.running ? '<span style="color:#6ee7b7">\u25CF</span>' : '<span style="color:#666">\u25CB</span>';
       const statusText = a.running ? 'live' : 'off';
-      const modelOpts = ['claude-opus-4-6', 'claude-sonnet-4-6', 'claude-sonnet-4-5', 'claude-haiku-4-5'];
-      const modelShort = function(m) { return {'claude-opus-4-6':'Opus','claude-sonnet-4-6':'Sonnet','claude-sonnet-4-5':'Sonnet 4.5','claude-haiku-4-5':'Haiku'}[m] || m; };
-      const currentModel = a.model || (a.id === 'main' ? 'claude-opus-4-6' : 'claude-sonnet-4-6');
-      const modelLabel = modelShort(currentModel);
+      const available = (a.availableModels && a.availableModels.length > 0)
+        ? a.availableModels.map(m => typeof m === 'string' ? { id: m, name: m } : m)
+        : [{ id: 'default', name: 'Default Model' }];
+      const currentModel = a.model || 'default';
+      const activeObj = available.find(m => m.id === currentModel);
+      const modelLabel = activeObj ? (activeObj.name || activeObj.id) : currentModel;
+      const modelItems = available.map(m => '<div class="model-opt' + (currentModel === m.id ? ' model-active' : '') + '" data-model="' + escapeHtml(m.id) + '" onclick="pickModel(this)">' + escapeHtml(m.name || m.id) + '</div>').join('');
+      const customOpt = '<div class="model-opt" style="color:#a78bfa;border-top:1px solid #333;font-weight:600" onclick="enterCustomModel(this)">+ Custom Model...</div>';
       const modelSelect = '<div class="model-picker" data-agent="' + a.id + '" onclick="event.stopPropagation();toggleModelPicker(this)">' +
-        '<span class="model-current">' + modelLabel + ' <span style="font-size:8px;opacity:0.5">&#9662;</span></span>' +
-        '<div class="model-menu" style="display:none">' +
-          modelOpts.map(m => '<div class="model-opt' + (currentModel === m ? ' model-active' : '') + '" data-model="' + m + '" onclick="pickModel(this)">' + modelShort(m) + '</div>').join('') +
+        '<span class="model-current" title="' + escapeHtml(currentModel) + '">' + escapeHtml(modelLabel) + ' <span style="font-size:8px;opacity:0.5">&#9662;</span></span>' +
+        '<div class="model-menu" style="display:none;max-height:220px;overflow-y:auto">' +
+          modelItems + customOpt +
         '</div>' +
       '</div>';
       return '<div class="card clickable-card" style="min-width:130px;flex:1;max-width:220px;border-left:3px solid ' + color + '" data-agent="' + a.id + '" onclick="toggleAgentDetail(this.dataset.agent)">' +
@@ -996,6 +1001,49 @@ function toggleModelPicker(el) {
   // Close all other menus first
   document.querySelectorAll('.model-menu').forEach(function(m) { m.style.display = 'none'; });
   menu.style.display = isOpen ? 'none' : '';
+}
+
+async function setActiveAgentDirect(agentId) {
+  try {
+    await fetch(BASE + '/api/agents/active?token=' + TOKEN, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ agentId: agentId }),
+    });
+    await loadAgents();
+  } catch(e) { console.error('Agent switch failed:', e); }
+}
+
+function enterCustomModel(optEl) {
+  var picker = optEl.closest('.model-picker');
+  var agentId = picker.dataset.agent;
+  picker.querySelector('.model-menu').style.display = 'none';
+  var custom = prompt('Enter model string for ' + agentId + ' (e.g. deepseek-ai/DeepSeek-V3, gpt-4o, qwen2.5-coder):');
+  if (custom && custom.trim()) {
+    setAgentModel(agentId, custom.trim());
+  }
+}
+
+async function setAgentModel(agentId, model) {
+  try {
+    await fetch(BASE + '/api/agents/' + agentId + '/model?token=' + TOKEN, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: model }),
+    });
+    await loadAgents();
+  } catch(e) { console.error('Model update failed:', e); }
+}
+
+function enterGlobalCustomModel() {
+  var custom = prompt('Enter model string for ALL agents (e.g. gpt-4o, claude-sonnet-4-6):');
+  if (custom && custom.trim()) {
+    fetch(BASE + '/api/agents/model?token=' + TOKEN, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: custom.trim() }),
+    }).then(() => loadAgents());
+  }
 }
 
 async function pickModel(optEl) {
@@ -2217,7 +2265,7 @@ async function sendChatMessage() {
     await fetch(BASE + '/api/chat/send?token=' + TOKEN, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message: text }),
+      body: JSON.stringify({ message: text, agentId: (typeof activeAgentTab !== "undefined" && activeAgentTab && activeAgentTab !== "all") ? activeAgentTab : undefined }),
     });
   } catch(e) {
     console.error('Send error', e);

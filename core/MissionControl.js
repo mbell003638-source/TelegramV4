@@ -198,19 +198,99 @@ class MissionControlServer {
                 });
             }
 
-            // 2. Agents List
+            // 2. Agents List (Dynamic CLI agent status & model capabilities)
             if (pathname === '/api/agents') {
+                const chatId = query.chatId || null;
+                const activeAgentKey = this.sessionStore?.getActiveAgent(chatId) || 'antigravity';
                 const list = Object.keys(this.agents).map((key) => {
                     const a = this.agents[key];
+                    const activeModel = this.sessionStore?.getActiveModel(key, chatId) || 'default';
+                    const availableModels = this.sessionStore?.getAvailableModels(key) || [];
                     return {
                         id: key,
                         name: a.name || key,
                         emoji: a.emoji || '🤖',
                         status: 'ready',
+                        active: key === activeAgentKey,
+                        model: activeModel,
+                        availableModels: availableModels,
                         description: `CLI engine adapter for ${a.name}`,
                     };
                 });
-                return this._sendJson(res, 200, { agents: list });
+                return this._sendJson(res, 200, { agents: list, activeAgent: activeAgentKey });
+            }
+
+            // 2b. Agent Model Management (GET / PATCH / POST)
+            if (pathname.match(/^\/api\/agents\/([^/]+)\/model$/)) {
+                const agentId = pathname.split('/')[3];
+                const chatId = query.chatId || null;
+                if (req.method === 'GET') {
+                    const model = this.sessionStore?.getActiveModel(agentId, chatId) || 'default';
+                    const availableModels = this.sessionStore?.getAvailableModels(agentId) || [];
+                    return this._sendJson(res, 200, { agentId, model, availableModels });
+                }
+                if (req.method === 'PATCH' || req.method === 'POST') {
+                    const body = await this._readBody(req);
+                    if (body.model) {
+                        this.sessionStore?.setActiveModel(agentId, body.model, chatId);
+                        // If custom model, add to available dynamic models so it appears in UI
+                        const current = this.sessionStore?.getAvailableModels(agentId) || [];
+                        if (!current.some(m => (typeof m === 'string' ? m : m.id) === body.model)) {
+                            const newModelEntry = { id: body.model, name: body.name || body.model };
+                            this.sessionStore?.setAvailableModels(agentId, [...current, newModelEntry]);
+                        }
+                        this.broadcast('agent.model_updated', { agentId, model: body.model });
+                        return this._sendJson(res, 200, { success: true, agentId, model: body.model });
+                    }
+                    return this._sendJson(res, 400, { error: 'Model required' });
+                }
+            }
+
+            // 2c. Global Model Switch (PATCH /api/agents/model)
+            if (pathname === '/api/agents/model' && (req.method === 'PATCH' || req.method === 'POST')) {
+                const body = await this._readBody(req);
+                const chatId = query.chatId || null;
+                if (body.model) {
+                    for (const agentKey of Object.keys(this.agents)) {
+                        this.sessionStore?.setActiveModel(agentKey, body.model, chatId);
+                    }
+                    this.broadcast('agent.global_model_updated', { model: body.model });
+                    return this._sendJson(res, 200, { success: true, model: body.model });
+                }
+                return this._sendJson(res, 400, { error: 'Model required' });
+            }
+
+            // 2d. Switch Active Agent (POST /api/agents/active or /api/agents/switch)
+            if ((pathname === '/api/agents/active' || pathname === '/api/agents/switch') && (req.method === 'POST' || req.method === 'PATCH')) {
+                const body = await this._readBody(req);
+                const agentId = body.agentId || body.agent;
+                const chatId = query.chatId || null;
+                if (agentId && this.agents[agentId]) {
+                    this.sessionStore?.setActiveAgent(agentId, chatId);
+                    this.broadcast('agent.switched', { activeAgent: agentId });
+                    return this._sendJson(res, 200, { success: true, activeAgent: agentId });
+                }
+                return this._sendJson(res, 400, { error: 'Valid agentId required' });
+            }
+
+            // 2e. Agent Usage Tokens
+            if (pathname.match(/^\/api\/agents\/([^/]+)\/tokens$/)) {
+                const agentId = pathname.split('/')[3];
+                const usage = this.db?.getUsage(agentId) || { inputTokens: 0, outputTokens: 0, turns: 0, costUsd: 0 };
+                return this._sendJson(res, 200, usage);
+            }
+
+            // 2f. Chat History & Conversation
+            if (pathname === '/api/chat/history' || pathname.match(/^\/api\/agents\/([^/]+)\/conversation$/)) {
+                const chatId = query.chatId || 'dashboard_chat';
+                const memories = this.db?.getMemories(chatId, { limit: Number(query.limit) || 40 }) || [];
+                const turns = memories.map(m => ({
+                    role: m.source === 'user' ? 'user' : 'assistant',
+                    content: m.raw_text || m.summary,
+                    source: m.source,
+                    timestamp: m.created_at,
+                }));
+                return this._sendJson(res, 200, { turns });
             }
 
             // 3. Mission Tasks (Kanban)
@@ -325,7 +405,13 @@ class MissionControlServer {
             if (pathname === '/api/chat/send' && req.method === 'POST') {
                 const body = await this._readBody(req);
                 const text = body.message || body.text || '';
-                const agentKey = body.agentId || this.sessionStore?.getActiveAgent() || 'antigravity';
+                const agentKey = body.agentId || this.sessionStore?.getActiveAgent('dashboard_chat') || 'antigravity';
+                if (body.agentId) {
+                    this.sessionStore?.setActiveAgent(body.agentId, 'dashboard_chat');
+                }
+                if (body.model) {
+                    this.sessionStore?.setActiveModel(agentKey, body.model, 'dashboard_chat');
+                }
 
                 // Dispatch to ActionExecutor
                 if (this.actionExecutor && text) {
@@ -345,7 +431,7 @@ class MissionControlServer {
                     this.actionExecutor._enqueue(fakeMsg);
                 }
 
-                return this._sendJson(res, 200, { success: true });
+                return this._sendJson(res, 200, { success: true, agent: agentKey });
             }
 
             // 9. Satellite Workers (Distributed Windows/Remote nodes)
