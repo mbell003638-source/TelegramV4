@@ -1,0 +1,29 @@
+[Unit]
+Description=ClaudeClaw Super Assistant Master Daemon (32GB Swarm Host)
+After=network.target network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/claudeclaw
+EnvironmentFile=/opt/claudeclaw/.env
+ExecStart=/usr/bin/node index.js
+Restart=always
+RestartSec=5s
+
+# 32 GB RAM VPS Resource Protection:
+# Limits assistant swarm to 28 GB, guaranteeing 4 GB for OS kernel, networking, and systemd
+MemoryMax=28G
+MemoryHigh=26G
+CPUWeight=100
+TasksMax=4096
+
+# Security & Sandboxing
+ProtectSystem=full
+NoNewPrivileges=true
+StandardOutput=append:/opt/claudeclaw/bot.log
+StandardError=append:/opt/claudeclaw/crash.log
+
+[Install]
+WantedBy=multi-user.target

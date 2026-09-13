@@ -1,0 +1,416 @@
+// =============================================================================
+//  core/MissionControl.js — Mission Control Web Server & SSE Streamer
+//
+//  Serves the local Kanban Dashboard on http://localhost:3141
+//  Connects:
+//    - Web Kanban UI to SQLite database (mission_tasks, hive_mind, memories)
+//    - Real-time SSE event bus to channelEventBus
+//    - Chat & task execution to ActionExecutor and Agents
+// =============================================================================
+const http = require('http');
+const { getDashboardHtml } = require('./dashboardHtml');
+const { channelEventBus, ChannelEvents } = require('./EventBus');
+const { globalAgentPool } = require('./AgentPool');
+const { globalSatelliteHub } = require('./SatelliteHub');
+
+class MissionControlServer {
+    constructor({ database, sessionStore, actionExecutor, agents, port = 3141, token = null }) {
+        this.db = database;
+        this.sessionStore = sessionStore;
+        this.actionExecutor = actionExecutor;
+        this.agents = agents;
+        this.port = Number(port) || 3141;
+        this.token = token || process.env.DASHBOARD_TOKEN || 'admin';
+        this.server = null;
+        this.sseClients = new Set();
+
+        // Listen for EventBus events to broadcast via SSE
+        this._wireEvents();
+    }
+
+    _wireEvents() {
+        channelEventBus.onAgentMessage((data) => {
+            this.broadcast('chat.message', data);
+        });
+
+        channelEventBus.onToolCall((data) => {
+            this.broadcast('chat.tool_call', data);
+        });
+
+        channelEventBus.onStatus((data) => {
+            this.broadcast('chat.status', data);
+        });
+
+        channelEventBus.onFinished((data) => {
+            this.broadcast('chat.finished', data);
+        });
+
+        channelEventBus.onError((data) => {
+            this.broadcast('chat.error', data);
+        });
+    }
+
+    broadcast(event, data) {
+        if (this.sseClients.size === 0) return;
+        const payload = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+        for (const client of this.sseClients) {
+            try {
+                client.write(payload);
+            } catch (err) {
+                this.sseClients.delete(client);
+            }
+        }
+    }
+
+    start() {
+        return new Promise((resolve, reject) => {
+            this.server = http.createServer((req, res) => this._handleRequest(req, res));
+            this.server.on('error', (err) => {
+                if (err.code === 'EADDRINUSE') {
+                    console.warn(`[MissionControl] Port ${this.port} in use. Dashboard may already be running.`);
+                    resolve(false);
+                } else {
+                    reject(err);
+                }
+            });
+            this.server.listen(this.port, '0.0.0.0', () => {
+                console.log(`🚀 Mission Control Dashboard online at: http://localhost:${this.port}/?token=${this.token}`);
+                resolve(true);
+            });
+        });
+    }
+
+    stop() {
+        return new Promise((resolve) => {
+            for (const client of this.sseClients) {
+                try { client.end(); } catch (_) {}
+            }
+            this.sseClients.clear();
+            if (this.server) {
+                this.server.close(() => resolve());
+            } else {
+                resolve();
+            }
+        });
+    }
+
+    _sendJson(res, statusCode, data) {
+        const body = JSON.stringify(data);
+        res.writeHead(statusCode, {
+            'Content-Type': 'application/json',
+            'Access-Control-Allow-Origin': '*',
+            'Access-Control-Allow-Methods': 'GET, POST, PATCH, DELETE, OPTIONS',
+            'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+        });
+        res.end(body);
+    }
+
+    _readBody(req) {
+        return new Promise((resolve, reject) => {
+            let body = '';
+            req.on('data', (chunk) => {
+                body += chunk.toString();
+                if (body.length > 5 * 1024 * 1024) { // 5MB limit
+                    reject(new Error('Payload too large'));
+                }
+            });
+            req.on('end', () => {
+                try {
+                    resolve(body ? JSON.parse(body) : {});
+                } catch (e) {
+                    resolve({});
+                }
+            });
+            req.on('error', reject);
+        });
+    }
+
+    async _handleRequest(req, res) {
+        // CORS preflight
+        if (req.method === 'OPTIONS') {
+            res.writeHead(204, {
+                'Access-Control-Allow-Origin': '*',
+                'Access-Control-Allow-Methods': 'GET, POST, PATCH, DELETE, OPTIONS',
+                'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+            });
+            return res.end();
+        }
+
+        const reqUrl = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+        const pathname = reqUrl.pathname;
+        const query = Object.fromEntries(reqUrl.searchParams.entries());
+
+        // Auth check (allow / without token to prompt or query token)
+        const reqToken = query.token || req.headers['authorization']?.replace('Bearer ', '');
+        if (this.token && reqToken !== this.token) {
+            if (pathname === '/') {
+                res.writeHead(401, { 'Content-Type': 'text/html' });
+                return res.end(`
+                    <html><body style="background:#0f0f0f;color:#fff;font-family:sans-serif;padding:40px;text-align:center;">
+                        <h2>🔒 ClaudeClaw Mission Control</h2>
+                        <p style="color:#888;">Authentication token required. Pass <code>?token=YOUR_TOKEN</code> in the URL.</p>
+                    </body></html>
+                `);
+            }
+            return this._sendJson(res, 401, { error: 'Unauthorized' });
+        }
+
+        try {
+            // Serve Dashboard HTML
+            if (pathname === '/') {
+                const chatId = query.chatId || '';
+                const html = getDashboardHtml(this.token, chatId);
+                res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+                return res.end(html);
+            }
+
+            // Real-Time SSE Event Stream
+            if (pathname === '/api/chat/stream' || pathname === '/api/events') {
+                res.writeHead(200, {
+                    'Content-Type': 'text/event-stream',
+                    'Cache-Control': 'no-cache',
+                    'Connection': 'keep-alive',
+                    'Access-Control-Allow-Origin': '*',
+                });
+                res.write(': connected\n\n');
+                this.sseClients.add(res);
+                req.on('close', () => {
+                    this.sseClients.delete(res);
+                });
+                return;
+            }
+
+            // 1. Status & System Info
+            if (pathname === '/api/info' || pathname === '/api/status' || pathname === '/api/health') {
+                const activeAgentKey = this.sessionStore?.getActiveAgent() || 'antigravity';
+                const agent = this.agents[activeAgentKey];
+                return this._sendJson(res, 200, {
+                    status: 'online',
+                    version: '4.2.0-universal',
+                    botName: 'ClaudeClaw Super Assistant',
+                    telegramConnected: true,
+                    isProcessing: this.actionExecutor?.isProcessing || false,
+                    activeAgent: activeAgentKey,
+                    agentEmoji: agent?.emoji || '🤖',
+                    satellites: globalSatelliteHub.getStatus(),
+                    uptimeSeconds: Math.floor(process.uptime()),
+                    timestamp: Date.now(),
+                });
+            }
+
+            // 2. Agents List
+            if (pathname === '/api/agents') {
+                const list = Object.keys(this.agents).map((key) => {
+                    const a = this.agents[key];
+                    return {
+                        id: key,
+                        name: a.name || key,
+                        emoji: a.emoji || '🤖',
+                        status: 'ready',
+                        description: `CLI engine adapter for ${a.name}`,
+                    };
+                });
+                return this._sendJson(res, 200, { agents: list });
+            }
+
+            // 3. Mission Tasks (Kanban)
+            if (pathname === '/api/mission/tasks') {
+                if (req.method === 'GET') {
+                    const tasks = this.db.getMissionTasks({
+                        agentId: query.agentId,
+                        status: query.status,
+                    });
+                    return this._sendJson(res, 200, { tasks });
+                }
+
+                if (req.method === 'POST') {
+                    const body = await this._readBody(req);
+                    const task = this.db.createMissionTask({
+                        title: body.title || 'Untitled Task',
+                        prompt: body.prompt || body.title || '',
+                        assignedAgent: body.assignedAgent || body.agent || 'main',
+                        priority: body.priority || 0,
+                        createdBy: 'dashboard',
+                    });
+                    this.broadcast('mission.task_created', task);
+
+                    // If auto-run requested or agent assigned, execute asynchronously
+                    if (body.runImmediately && this.actionExecutor) {
+                        this._executeMissionTask(task);
+                    }
+
+                    return this._sendJson(res, 201, { task });
+                }
+            }
+
+            // Single Mission Task Route: /api/mission/tasks/:id
+            if (pathname.startsWith('/api/mission/tasks/')) {
+                const parts = pathname.split('/');
+                const taskId = parts[4];
+
+                if (req.method === 'GET') {
+                    const task = this.db.getMissionTask(taskId);
+                    if (!task) return this._sendJson(res, 404, { error: 'Task not found' });
+                    return this._sendJson(res, 200, { task });
+                }
+
+                if (req.method === 'PATCH') {
+                    const body = await this._readBody(req);
+                    let task = null;
+                    if (body.status) {
+                        task = this.db.updateMissionTaskStatus(taskId, body.status, {
+                            result: body.result,
+                            error: body.error,
+                        });
+                    }
+                    if (body.assignedAgent) {
+                        task = this.db.reassignMissionTask(taskId, body.assignedAgent);
+                    }
+                    this.broadcast('mission.task_updated', task);
+                    return this._sendJson(res, 200, { task });
+                }
+
+                if (req.method === 'DELETE') {
+                    this.db.deleteMissionTask(taskId);
+                    this.broadcast('mission.task_deleted', { id: taskId });
+                    return this._sendJson(res, 200, { success: true });
+                }
+            }
+
+            // 4. Hive Mind Entries
+            if (pathname === '/api/hive-mind') {
+                const entries = this.db.getHiveMindEntries({
+                    agentId: query.agentId,
+                    limit: Number(query.limit) || 30,
+                });
+                return this._sendJson(res, 200, { entries });
+            }
+
+            // 5. Memories
+            if (pathname.startsWith('/api/memories')) {
+                const chatId = query.chatId || '';
+                const memories = this.db.getMemories(chatId, {
+                    minSalience: Number(query.minSalience) || 0.1,
+                    limit: Number(query.limit) || 50,
+                });
+                return this._sendJson(res, 200, { memories });
+            }
+
+            // 6. Token Usage
+            if (pathname === '/api/tokens') {
+                const stats = {};
+                for (const agentKey of Object.keys(this.agents)) {
+                    stats[agentKey] = this.db.getUsage(agentKey);
+                }
+                return this._sendJson(res, 200, { stats });
+            }
+
+            // 7. Concurrency & Resource Pool Management
+            if (pathname === '/api/concurrency') {
+                if (req.method === 'GET') {
+                    return this._sendJson(res, 200, globalAgentPool.getStatus());
+                }
+                if (req.method === 'POST') {
+                    const body = await this._readBody(req);
+                    if (body.maxConcurrent) {
+                        globalAgentPool.setMaxConcurrent(body.maxConcurrent);
+                        this.broadcast('concurrency.updated', globalAgentPool.getStatus());
+                        return this._sendJson(res, 200, { success: true, status: globalAgentPool.getStatus() });
+                    }
+                    return this._sendJson(res, 400, { error: 'maxConcurrent is required' });
+                }
+            }
+
+            // 8. Chat Send (Dashboard Web Chat)
+            if (pathname === '/api/chat/send' && req.method === 'POST') {
+                const body = await this._readBody(req);
+                const text = body.message || body.text || '';
+                const agentKey = body.agentId || this.sessionStore?.getActiveAgent() || 'antigravity';
+
+                // Dispatch to ActionExecutor
+                if (this.actionExecutor && text) {
+                    const fakeMsg = {
+                        id: `dash_${Date.now()}`,
+                        platform: 'dashboard',
+                        chatId: 'dashboard_chat',
+                        user: { id: 'admin', username: 'DashboardUser' },
+                        content: { type: 'text', text },
+                        raw: {
+                            reply: async (replyText) => {
+                                this.broadcast('chat.assistant_reply', { text: replyText });
+                            },
+                        },
+                    };
+                    // Enqueue
+                    this.actionExecutor._enqueue(fakeMsg);
+                }
+
+                return this._sendJson(res, 200, { success: true });
+            }
+
+            // 9. Satellite Workers (Distributed Windows/Remote nodes)
+            if (pathname === '/api/satellite/poll') {
+                const body = (req.method === 'POST') ? await this._readBody(req) : {};
+                const satelliteId = body.satelliteId || query.satelliteId || 'windows-desktop';
+                const metadata = {
+                    hostname: body.hostname || query.hostname,
+                    platform: body.platform || query.platform || 'win32',
+                    systemInfo: body.systemInfo || {},
+                };
+                const ip = req.socket?.remoteAddress || '127.0.0.1';
+                globalSatelliteHub.handlePoll(satelliteId, res, metadata, ip);
+                return;
+            }
+
+            if (pathname === '/api/satellite/response' && req.method === 'POST') {
+                const body = await this._readBody(req);
+                const satelliteId = body.satelliteId || query.satelliteId;
+                const result = globalSatelliteHub.handleResponse(satelliteId, body);
+                return this._sendJson(res, 200, result);
+            }
+
+            if (pathname === '/api/satellite/status') {
+                return this._sendJson(res, 200, globalSatelliteHub.getStatus());
+            }
+
+            // 404 for unknown endpoints
+            return this._sendJson(res, 404, { error: `Endpoint not found: ${pathname}` });
+
+        } catch (err) {
+            console.error('[MissionControl Error]', err);
+            return this._sendJson(res, 500, { error: err.message });
+        }
+    }
+
+    async _executeMissionTask(task) {
+        const slotId = `mission_${task.id}`;
+        const agentKey = task.assigned_agent && this.agents[task.assigned_agent] ? task.assigned_agent : 'antigravity';
+        const agent = this.agents[agentKey];
+
+        await globalAgentPool.acquire(slotId, {
+            agentKey,
+            priority: task.priority || 0,
+            description: task.title,
+        });
+
+        try {
+            this.db.updateMissionTaskStatus(task.id, 'in_progress');
+            this.broadcast('mission.task_updated', { ...task, status: 'in_progress' });
+
+            // Run agent via ActionExecutor or Agent directly
+            if (agent && typeof agent.execute === 'function') {
+                const result = await agent.execute(task.prompt, `task_${task.id}`);
+                this.db.updateMissionTaskStatus(task.id, 'completed', { result });
+                this.db.recordHiveMind(agentKey, 'mission_control', `completed_task_${task.id}`, task.title, [task.id]);
+                this.broadcast('mission.task_updated', { ...task, status: 'completed', result });
+            }
+        } catch (err) {
+            this.db.updateMissionTaskStatus(task.id, 'failed', { error: err.message });
+            this.broadcast('mission.task_updated', { ...task, status: 'failed', error: err.message });
+        } finally {
+            globalAgentPool.release(slotId);
+        }
+    }
+}
+
+module.exports = MissionControlServer;

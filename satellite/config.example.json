@@ -1,0 +1,5 @@
+{
+  "vpsUrl": "http://YOUR_VPS_IP:3141",
+  "satelliteKey": "admin",
+  "satelliteId": "windows-desktop"
+}

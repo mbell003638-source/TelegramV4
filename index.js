@@ -1,0 +1,210 @@
+// =============================================================================
+//  index.js — Telegram AI Bridge v4 Main Orchestrator
+//
+//  Initializes the session store, agent registry, action router, and gateway.
+// =============================================================================
+require('dotenv').config();
+
+const dns = require('dns');
+if (typeof dns.setDefaultResultOrder === 'function') {
+    dns.setDefaultResultOrder('ipv4first');
+}
+
+// =============================================================================
+//  DNS OVERRIDE — Bypass ISP DNS Hijacking for Telegram API (Windows only)
+// =============================================================================
+if (process.platform === 'win32') {
+    const { Resolver } = require('dns');
+    const resolver = new Resolver();
+    resolver.setServers(['8.8.8.8', '1.1.1.1']);
+
+    const originalLookup = dns.lookup;
+    dns.lookup = function(hostname, options, callback) {
+        if (hostname === 'api.telegram.org') {
+            let opt = options;
+            let cb = callback;
+            if (typeof options === 'function') {
+                cb = options;
+                opt = {};
+            }
+
+            return originalLookup.call(dns, hostname, options, (err, address, family) => {
+                const isHijacked = !err && (
+                    (typeof address === 'string' && address === '49.44.79.236') ||
+                    (Array.isArray(address) && address.some(addr => (addr.address === '49.44.79.236' || addr === '49.44.79.236')))
+                );
+
+                if (err || isHijacked) {
+                    return resolver.resolve4('api.telegram.org', (fallbackErr, addresses) => {
+                        const resolvedIp = (!fallbackErr && addresses && addresses.length > 0) ? addresses[0] : '149.154.166.110';
+                        if (opt.all) return cb(null, [{ address: resolvedIp, family: 4 }]);
+                        return cb(null, resolvedIp, 4);
+                    });
+                }
+
+                return cb(err, address, family);
+            });
+        }
+        return originalLookup.call(dns, hostname, options, callback);
+    };
+}
+
+const path = require('path');
+const fs = require('fs');
+const net = require('net');
+const config = require('./core/config');
+const { rotateLogs } = require('./core/logRotation');
+
+rotateLogs(config.logFile, config.logMaxBytes, config.logBackups);
+const logRotationTimer = setInterval(() => rotateLogs(config.logFile, config.logMaxBytes, config.logBackups), 60000);
+logRotationTimer.unref();
+
+// =============================================================================
+//  SINGLETON — TCP port lock (prevents duplicate instances)
+// =============================================================================
+const LOCK_PORT = config.lockPort;
+const lockServer = net.createServer();
+lockServer.once('error', (err) => {
+    if (err.code === 'EADDRINUSE') {
+        const msg = 'Another v4 instance is already running (port lock). Exiting with code 2.';
+        console.error(`[${new Date().toISOString()}] ${msg}`);
+        try { fs.appendFileSync('crash.log', `[${new Date().toISOString()}] ${msg}\n`); } catch(e) {}
+        process.exit(2);
+    }
+});
+    lockServer.listen(LOCK_PORT, config.lockHost, () => {
+    console.log(`Singleton lock acquired on port ${LOCK_PORT}`);
+});
+
+process.on('uncaughtException', (err) => {
+    fs.appendFileSync('crash.log', `[UNCAUGHT EXCEPTION] ${err.stack}\n`);
+    process.exit(1);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+    fs.appendFileSync('crash.log', `[UNHANDLED REJECTION] ${reason}\n`);
+});
+
+if (process.platform === 'win32') {
+    process.on('SIGHUP', () => {
+        console.log(`[${new Date().toISOString()}] SIGHUP received (console disconnect) — ignoring, staying alive.`);
+    });
+}
+
+const Gateway = require('./core/Gateway');
+const ActionExecutor = require('./core/ActionExecutor');
+const SessionStore = require('./core/SessionStore');
+const { getDatabase } = require('./core/Database');
+const MissionControlServer = require('./core/MissionControl');
+
+// Agent implementations
+const AntigravityAgent = require('./agents/AntigravityAgent');
+const OpenCodeAgent = require('./agents/OpenCodeAgent');
+const CodexAgent = require('./agents/CodexAgent');
+const ClaudeAgent = require('./agents/ClaudeAgent');
+const OpenClawAgent = require('./agents/OpenClawAgent');
+const HermesAgent = require('./agents/HermesAgent');
+const PiAgent = require('./agents/PiAgent');
+const GrokAgent = require('./agents/GrokAgent');
+
+// =============================================================================
+//  CONFIG
+// =============================================================================
+const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
+const ALLOWED_USER_ID = process.env.ALLOWED_USER_ID ? parseInt(process.env.ALLOWED_USER_ID, 10) : null;
+
+if (!BOT_TOKEN) {
+    console.log('ℹ️ TELEGRAM_BOT_TOKEN not set. Running in Standalone Mission Control Web UI mode.');
+}
+
+// =============================================================================
+//  INITIALIZE
+// =============================================================================
+async function main() {
+    console.log('=== Telegram Bridge v4 ===');
+
+    // 1. Create SessionStore
+    const sessionStore = new SessionStore(config.baseDir);
+
+    // 2. Register Agents
+    const agents = {
+        antigravity: new AntigravityAgent(sessionStore),
+        opencode: new OpenCodeAgent(sessionStore),
+        codex: new CodexAgent(sessionStore),
+        claude: new ClaudeAgent(sessionStore),
+        openclaw: new OpenClawAgent(sessionStore),
+        hermes: new HermesAgent(sessionStore),
+        pi: new PiAgent(sessionStore),
+        grok: new GrokAgent(sessionStore),
+    };
+
+    // Initialize all agents in parallel (CLI lookups / model discovery).
+    await Promise.all(Object.values(agents).map(agent =>
+        typeof agent.initialize === 'function'
+            ? agent.initialize().catch(err => console.warn(`[AgentInit] ${agent.name}: ${err.message}`))
+            : Promise.resolve()
+    ));
+
+    // Warm the last-used agent in the background so the first user message
+    // does not pay initialize()+start() again.
+    const activeKey = sessionStore.getActiveAgent();
+    const activeAgent = agents[activeKey];
+    if (activeAgent && typeof activeAgent.ensureRunning === 'function') {
+        activeAgent.ensureRunning().catch(err => console.warn(`[AgentWarm] ${activeAgent.name}: ${err.message}`));
+    }
+
+    // 3. Create ActionExecutor
+    const actionExecutor = new ActionExecutor(sessionStore, agents);
+
+    // 4. Create Gateway and wire messageHandler
+    // 4. Initialize unified SQLite database & start Mission Control Dashboard
+    const database = getDatabase(path.join(config.baseDir, 'store'));
+    const dashboardPort = Number(process.env.DASHBOARD_PORT) || 3141;
+    const dashboardToken = process.env.DASHBOARD_TOKEN || 'admin';
+    const missionControl = new MissionControlServer({
+        database,
+        sessionStore,
+        actionExecutor,
+        agents,
+        port: dashboardPort,
+        token: dashboardToken,
+    });
+    await missionControl.start().catch((err) => {
+        console.warn(`[MissionControl] Could not bind port ${dashboardPort}: ${err.message}`);
+    });
+
+    // 5. Optional Telegram Gateway (runs if BOT_TOKEN is configured)
+    let gateway = null;
+    if (BOT_TOKEN && process.env.DISABLE_TELEGRAM !== 'true') {
+        try {
+            const messageHandler = actionExecutor.getMessageHandler();
+            gateway = new Gateway(BOT_TOKEN, messageHandler, ALLOWED_USER_ID, path.join(config.baseDir, 'uploads'));
+            actionExecutor.setShellNotifier((chatId, text, options) => {
+                if (gateway?.bot?.telegram) {
+                    return gateway.bot.telegram.sendMessage(chatId, text, options);
+                }
+            });
+            await gateway.start();
+            console.log('🤖 Telegram Gateway online and polling.');
+        } catch (err) {
+            console.warn(`⚠️ [Gateway] Telegram bot could not connect (${err.message}). Web Mission Control remains fully functional.`);
+        }
+    } else {
+        console.log('ℹ️ Running in Web Mission Control standalone mode (no Telegram token configured).');
+    }
+
+    console.log('✅ System Online. Architecture:');
+    console.log(`   Mission Control Web UI: http://localhost:${dashboardPort}/?token=${dashboardToken}`);
+    if (gateway) {
+        console.log('   Control Plane: Dual (Telegram Bot + Mission Control Web UI)');
+    } else {
+        console.log('   Control Plane: Mission Control Web UI (Browser)');
+    }
+    console.log(`   Registered agents: ${Object.keys(agents).join(', ')}`);
+    console.log(`   Active agent: ${sessionStore.getActiveAgent()}`);
+}
+
+main().catch((err) => {
+    console.error('❌ Fatal error:', err);
+    process.exit(1);
+});
