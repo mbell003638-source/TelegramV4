@@ -206,12 +206,14 @@ class MissionControlServer {
                     const a = this.agents[key];
                     const activeModel = this.sessionStore?.getActiveModel(key, chatId) || 'default';
                     const availableModels = this.sessionStore?.getAvailableModels(key) || [];
+                    const isActive = key === activeAgentKey;
                     return {
                         id: key,
                         name: a.name || key,
                         emoji: a.emoji || '🤖',
-                        status: 'ready',
-                        active: key === activeAgentKey,
+                        status: isActive ? 'live' : 'ready',
+                        active: isActive,
+                        running: isActive || !!a.isWarm,
                         model: activeModel,
                         availableModels: availableModels,
                         description: `CLI engine adapter for ${a.name}`,
@@ -273,7 +275,63 @@ class MissionControlServer {
                 return this._sendJson(res, 400, { error: 'Valid agentId required' });
             }
 
-            // 2e. Agent Usage Tokens
+            // 2e. Agent Lifecycle (activate, deactivate, tasks, delete)
+            if (pathname.match(/^\/api\/agents\/([^/]+)\/activate$/) && req.method === 'POST') {
+                const agentId = pathname.split('/')[3];
+                const chatId = query.chatId || null;
+                const agent = this.agents[agentId];
+                if (agent) {
+                    this.sessionStore?.setActiveAgent(agentId, chatId);
+                    if (typeof agent.ensureRunning === 'function') {
+                        agent.ensureRunning().catch(err => console.warn(`[AgentActivate] ${agent.name}: ${err.message}`));
+                    }
+                    this.broadcast('agent.switched', { activeAgent: agentId });
+                    return this._sendJson(res, 200, { ok: true, activeAgent: agentId, pid: process.pid, message: `Activated ${agent.name}` });
+                }
+                return this._sendJson(res, 404, { ok: false, error: `Agent not found: ${agentId}` });
+            }
+
+            if (pathname.match(/^\/api\/agents\/([^/]+)\/deactivate$/) && req.method === 'POST') {
+                const agentId = pathname.split('/')[3];
+                const agent = this.agents[agentId];
+                if (agent) {
+                    if (typeof agent.stop === 'function') {
+                        await agent.stop();
+                    }
+                    this.broadcast('agent.stopped', { agentId });
+                    return this._sendJson(res, 200, { ok: true, agentId, message: `Stopped ${agent.name}` });
+                }
+                return this._sendJson(res, 404, { ok: false, error: `Agent not found: ${agentId}` });
+            }
+
+            if (pathname.match(/^\/api\/agents\/([^/]+)\/tasks$/) && req.method === 'GET') {
+                const agentId = pathname.split('/')[3];
+                const tasks = this.db.getMissionTasks({ agentId }) || [];
+                return this._sendJson(res, 200, { tasks });
+            }
+
+            if (pathname.match(/^\/api\/agents\/([^/]+)(\/full)?$/) && req.method === 'DELETE') {
+                const agentId = pathname.split('/')[3];
+                const agent = this.agents[agentId];
+                if (agent) {
+                    if (typeof agent.stop === 'function') {
+                        await agent.stop();
+                    }
+                    this.sessionStore?.clearSession(agentId);
+                    return this._sendJson(res, 200, { ok: true, message: `Agent ${agentId} cleared` });
+                }
+                return this._sendJson(res, 404, { ok: false, error: `Agent not found: ${agentId}` });
+            }
+
+            // 2f. Agent Templates & Validation (For New Agent Wizard)
+            if (pathname === '/api/agents/templates' && req.method === 'GET') {
+                return this._sendJson(res, 200, { templates: [] });
+            }
+            if (pathname === '/api/agents/validate-id' && req.method === 'GET') {
+                return this._sendJson(res, 200, { valid: true });
+            }
+
+            // 2g. Agent Usage Tokens
             if (pathname.match(/^\/api\/agents\/([^/]+)\/tokens$/)) {
                 const agentId = pathname.split('/')[3];
                 const usage = this.db?.getUsage(agentId) || { inputTokens: 0, outputTokens: 0, turns: 0, costUsd: 0 };

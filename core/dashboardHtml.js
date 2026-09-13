@@ -1142,18 +1142,16 @@ async function toggleAgentDetail(agentId) {
       }).join('');
     }
 
-    // Agent management controls (not for main)
-    if (agentId !== 'main') {
-      html += '<div class="flex gap-2 mt-4 pt-3" style="border-top:1px solid #2a2a2a">';
-      if (agent && agent.running) {
-        html += '<button data-agent="' + agentId + '" data-act="stop" onclick="agentModalAction(this.dataset.agent,this.dataset.act)" style="flex:1;background:#1a1a1a;color:#f87171;border:1px solid #7f1d1d;border-radius:8px;padding:8px;font-size:12px;font-weight:600;cursor:pointer">Stop</button>';
-      } else {
-        html += '<button data-agent="' + agentId + '" data-act="start" onclick="agentModalAction(this.dataset.agent,this.dataset.act)" style="flex:1;background:#064e3b;color:#6ee7b7;border:1px solid #065f46;border-radius:8px;padding:8px;font-size:12px;font-weight:600;cursor:pointer">Start</button>';
-      }
-      html += '<button data-agent="' + agentId + '" data-act="delete" onclick="agentModalAction(this.dataset.agent,this.dataset.act)" style="background:#1a1a1a;color:#6b7280;border:1px solid #2a2a2a;border-radius:8px;padding:8px 14px;font-size:12px;cursor:pointer">Delete</button>';
-      html += '</div>';
-      html += '<div id="agent-action-status" class="text-xs text-center mt-2" style="min-height:16px"></div>';
+    // Agent management controls
+    html += '<div class="flex gap-2 mt-4 pt-3" style="border-top:1px solid #2a2a2a">';
+    if (agent && agent.active) {
+      html += '<button disabled style="flex:1;background:#064e3b;color:#6ee7b7;border:1px solid #065f46;border-radius:8px;padding:8px;font-size:12px;font-weight:600;cursor:default;opacity:0.9">Active Assistant</button>';
+    } else {
+      html += '<button data-agent="' + agentId + '" data-act="start" onclick="agentModalAction(this.dataset.agent,this.dataset.act)" style="flex:1;background:#4f46e5;color:#fff;border:none;border-radius:8px;padding:8px;font-size:12px;font-weight:600;cursor:pointer">Set as Active Assistant</button>';
     }
+    html += '<button data-agent="' + agentId + '" data-act="delete" onclick="agentModalAction(this.dataset.agent,this.dataset.act)" style="background:#1a1a1a;color:#6b7280;border:1px solid #2a2a2a;border-radius:8px;padding:8px 14px;font-size:12px;cursor:pointer">Clear Session</button>';
+    html += '</div>';
+    html += '<div id="agent-action-status" class="text-xs text-center mt-2" style="min-height:16px"></div>';
 
     if (!html) html = '<div class="text-gray-500 text-sm text-center py-8">No activity yet for this agent.</div>';
     body.innerHTML = html;
@@ -1191,15 +1189,15 @@ async function agentModalAction(agentId, action) {
   }
 
   if (action === 'start') {
-    status.innerHTML = '<span style="color:#fbbf24">Starting...</span>';
+    status.innerHTML = '<span style="color:#fbbf24">Activating...</span>';
     try {
       var res = await fetch(BASE + '/api/agents/' + agentId + '/activate?token=' + TOKEN, { method: 'POST' });
       var data = await res.json();
       if (data.ok) {
-        status.innerHTML = '<span style="color:#6ee7b7">Started' + (data.pid ? ' (PID ' + data.pid + ')' : '') + '</span>';
+        status.innerHTML = '<span style="color:#6ee7b7">Activated ' + (agent ? agent.name : agentId) + '</span>';
         setTimeout(function() { closeAgentModal(); loadAgents(); }, 800);
       } else {
-        status.innerHTML = '<span style="color:#f87171">' + escapeHtml(data.error || 'Start failed') + '</span>';
+        status.innerHTML = '<span style="color:#f87171">' + escapeHtml(data.error || 'Activation failed') + '</span>';
       }
     } catch(e) { status.innerHTML = '<span style="color:#f87171">Network error</span>'; }
   }
