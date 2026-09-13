@@ -711,14 +711,14 @@ class MissionControlServer {
                             console.warn('[Daily.co] Room provision error:', err.message);
                         }
                     }
-                    // Fallback to instant live WebRTC room that works immediately without 404
+                    // Fallback to instant live WebRTC room that works immediately without 404 or moderator login
                     if (!meetUrl) {
                         const roomCode = `ClaudeClaw-${agentId}-${Date.now().toString(36)}`;
-                        meetUrl = `https://meet.jit.si/${roomCode}#config.startWithVideoMuted=true`;
+                        meetUrl = `https://p2p.mirotalk.com/join/${roomCode}`;
                     }
                 } else if (!meetUrl) {
                     const roomCode = `ClaudeClaw-${agentId}-${Date.now().toString(36)}`;
-                    meetUrl = `https://meet.jit.si/${roomCode}#config.startWithVideoMuted=true`;
+                    meetUrl = `https://p2p.mirotalk.com/join/${roomCode}`;
                 }
 
                 const session = {
