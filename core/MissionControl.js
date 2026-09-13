@@ -37,18 +37,26 @@ class MissionControlServer {
 
         channelEventBus.onToolCall((data) => {
             this.broadcast('chat.tool_call', data);
+            this.broadcast('progress', { description: `Using tool: ${data.toolName || 'tool'}` });
         });
 
         channelEventBus.onStatus((data) => {
             this.broadcast('chat.status', data);
+            this.broadcast('progress', { description: data.message || 'Thinking...' });
         });
 
         channelEventBus.onFinished((data) => {
             this.broadcast('chat.finished', data);
+            if (data.finalText) {
+                this.broadcast('assistant_message', { content: data.finalText, source: data.agentKey });
+                this.broadcast('processing', { processing: false });
+            }
         });
 
         channelEventBus.onError((data) => {
             this.broadcast('chat.error', data);
+            this.broadcast('error', { content: data.error?.message || String(data.error), source: data.agentKey });
+            this.broadcast('processing', { processing: false });
         });
     }
 
@@ -351,13 +359,33 @@ class MissionControlServer {
             // 2f. Chat History & Conversation
             if (pathname === '/api/chat/history' || pathname.match(/^\/api\/agents\/([^/]+)\/conversation$/)) {
                 const chatId = query.chatId || 'dashboard_chat';
-                const memories = this.db?.getMemories(chatId, { limit: Number(query.limit) || 40 }) || [];
-                const turns = memories.map(m => ({
-                    role: m.source === 'user' ? 'user' : 'assistant',
-                    content: m.raw_text || m.summary,
-                    source: m.source,
-                    timestamp: m.created_at,
-                }));
+                const match = pathname.match(/^\/api\/agents\/([^/]+)\/conversation$/);
+                const filterAgent = match ? match[1] : null;
+
+                // 1. Get real turns from sessionStore
+                const recentTurns = this.sessionStore?.getRecentTurns(chatId) || [];
+                let turns = [];
+                for (const t of recentTurns) {
+                    if (filterAgent && t.agent && t.agent !== filterAgent) continue;
+                    if (t.userText) {
+                        turns.push({ role: 'user', content: t.userText, source: 'user', timestamp: t.at });
+                    }
+                    if (t.assistantText) {
+                        turns.push({ role: 'assistant', content: t.assistantText, source: t.agent || 'assistant', timestamp: t.at });
+                    }
+                }
+
+                // 2. Also check memories if turns are empty
+                if (turns.length === 0) {
+                    const memories = this.db?.getMemories(chatId, { limit: Number(query.limit) || 40 }) || [];
+                    turns = memories.map(m => ({
+                        role: m.source === 'user' ? 'user' : 'assistant',
+                        content: m.raw_text || m.summary,
+                        source: m.source,
+                        timestamp: m.created_at,
+                    }));
+                }
+
                 return this._sendJson(res, 200, { turns });
             }
 
@@ -827,26 +855,66 @@ class MissionControlServer {
             // 10. Chat Send (Dashboard Web Chat)
             if (pathname === '/api/chat/send' && req.method === 'POST') {
                 const body = await this._readBody(req);
-                const text = body.message || body.text || '';
-                const agentKey = body.agentId || this.sessionStore?.getActiveAgent('dashboard_chat') || 'antigravity';
-                if (body.agentId) {
-                    this.sessionStore?.setActiveAgent(body.agentId, 'dashboard_chat');
+                const text = (body.message || body.text || '').trim();
+                const targetChatId = body.chatId || query.chatId || 'dashboard_chat';
+                const agentKey = (body.agentId && body.agentId !== 'all')
+                    ? body.agentId
+                    : (this.sessionStore?.getActiveAgent(targetChatId) || 'antigravity');
+                if (agentKey) {
+                    this.sessionStore?.setActiveAgent(agentKey, targetChatId);
                 }
                 if (body.model) {
-                    this.sessionStore?.setActiveModel(agentKey, body.model, 'dashboard_chat');
+                    this.sessionStore?.setActiveModel(agentKey, body.model, targetChatId);
                 }
+
+                // Broadcast immediately so client UI updates
+                this.broadcast('user_message', { content: text, source: 'user' });
+                this.broadcast('processing', { processing: true });
 
                 // Dispatch to ActionExecutor
                 if (this.actionExecutor && text) {
+                    let lastBroadcastText = '';
                     const fakeMsg = {
                         id: `dash_${Date.now()}`,
                         platform: 'dashboard',
-                        chatId: 'dashboard_chat',
+                        chatId: targetChatId,
                         user: { id: 'admin', username: 'DashboardUser' },
                         content: { type: 'text', text },
                         raw: {
+                            chat: { id: targetChatId },
+                            sendChatAction: async () => {},
                             reply: async (replyText) => {
-                                this.broadcast('chat.assistant_reply', { text: replyText });
+                                if (replyText && !replyText.includes('⏳ Thinking...') && !replyText.includes('📥 Queued')) {
+                                    if (replyText !== lastBroadcastText) {
+                                        lastBroadcastText = replyText;
+                                        this.broadcast('assistant_message', { content: replyText, source: agentKey });
+                                        this.broadcast('processing', { processing: false });
+                                    }
+                                }
+                                return { message_id: Math.floor(Math.random() * 100000) };
+                            },
+                            replyWithAudio: async () => {},
+                            telegram: {
+                                editMessageText: async (cid, msgId, inlineId, t) => {
+                                    if (t && !t.includes('⏳ Thinking...') && !t.includes('📥 Queued')) {
+                                        if (t !== lastBroadcastText) {
+                                            lastBroadcastText = t;
+                                            this.broadcast('assistant_message', { content: t, source: agentKey });
+                                            this.broadcast('processing', { processing: false });
+                                        }
+                                    }
+                                },
+                                deleteMessage: async () => {},
+                                sendMessage: async (cid, t) => {
+                                    if (t && !t.includes('⏳ Thinking...') && !t.includes('📥 Queued')) {
+                                        if (t !== lastBroadcastText) {
+                                            lastBroadcastText = t;
+                                            this.broadcast('assistant_message', { content: t, source: agentKey });
+                                            this.broadcast('processing', { processing: false });
+                                        }
+                                    }
+                                    return { message_id: Math.floor(Math.random() * 100000) };
+                                },
                             },
                         },
                     };

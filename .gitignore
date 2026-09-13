@@ -22,6 +22,7 @@ store/*.db
 store/*.db-wal
 store/*.db-shm
 !store/.gitkeep
+data/
 
 # Isolated Workspaces & Output Logs
 workspaces/task_*

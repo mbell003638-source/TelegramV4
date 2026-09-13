@@ -782,7 +782,7 @@ async function saveProviderSettings() {
 
 <script>
 const TOKEN = ${JSON.stringify(token)};
-const CHAT_ID = ${JSON.stringify(chatId)};
+const CHAT_ID = ${JSON.stringify(chatId || 'dashboard_chat')};
 const BASE = location.origin;
 
 // Device detection
@@ -3028,12 +3028,22 @@ function connectChatSSE() {
 
   chatSSE.addEventListener('user_message', function(e) {
     const ev = JSON.parse(e.data);
+    const msgs = document.getElementById('chat-messages');
+    const lastMsg = msgs ? msgs.lastElementChild : null;
+    if (lastMsg && lastMsg.classList.contains('chat-bubble-user') && lastMsg.getAttribute('data-content') === ev.content) {
+      return; // Deduplicate optimistic bubble
+    }
     appendChatBubble('user', ev.content, ev.source, true);
     if (!chatOpen) { unreadCount++; updateFabBadge(); }
   });
 
   chatSSE.addEventListener('assistant_message', function(e) {
     const ev = JSON.parse(e.data);
+    const msgs = document.getElementById('chat-messages');
+    const lastMsg = msgs ? msgs.lastElementChild : null;
+    if (lastMsg && lastMsg.classList.contains('chat-bubble-assistant') && lastMsg.getAttribute('data-content') === ev.content) {
+      return; // Deduplicate assistant reply
+    }
     appendChatBubble('assistant', ev.content, ev.source, true);
     hideTyping();
     if (!chatOpen) { unreadCount++; updateFabBadge(); }
@@ -3079,6 +3089,7 @@ function appendChatBubble(role, content, source, scroll) {
   const container = document.getElementById('chat-messages');
   const bubble = document.createElement('div');
   bubble.className = 'chat-bubble ' + (role === 'user' ? 'chat-bubble-user' : 'chat-bubble-assistant');
+  bubble.setAttribute('data-content', content);
   bubble.innerHTML = role === 'assistant' ? renderMarkdown(content) : escapeHtml(content);
   if (source && source !== 'telegram' && source !== 'dashboard') {
     const srcBadge = document.createElement('div');
@@ -3207,16 +3218,31 @@ async function sendChatMessage() {
   if (!text) return;
   input.value = '';
   autoResizeInput();
+
+  // Optimistically display user bubble immediately
+  appendChatBubble('user', text, 'user', true);
+  showTyping();
+
   // Disable send while processing
   document.getElementById('chat-send-btn').disabled = true;
   try {
-    await fetch(BASE + '/api/chat/send?token=' + TOKEN, {
+    const res = await fetch(BASE + '/api/chat/send?token=' + TOKEN, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message: text, agentId: (typeof activeAgentTab !== "undefined" && activeAgentTab && activeAgentTab !== "all") ? activeAgentTab : undefined }),
+      body: JSON.stringify({
+        message: text,
+        chatId: CHAT_ID,
+        agentId: (typeof activeAgentTab !== "undefined" && activeAgentTab && activeAgentTab !== "all") ? activeAgentTab : undefined
+      }),
     });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || ('HTTP ' + res.status));
+    }
   } catch(e) {
     console.error('Send error', e);
+    hideTyping();
+    appendChatBubble('assistant', '⚠️ Message send failed: ' + e.message, 'system', true);
   }
   // Re-enable after a short delay (SSE will deliver the actual messages)
   setTimeout(() => { document.getElementById('chat-send-btn').disabled = false; }, 1000);

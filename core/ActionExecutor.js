@@ -1375,19 +1375,23 @@ class ActionExecutor {
 
         // Typing + placeholder run in parallel with the agent so Telegram RTT
         // is not on the critical path.
-        ctx.sendChatAction('typing').catch(() => {});
-        state.typingTimer = setInterval(() => ctx.sendChatAction('typing').catch(() => {}), config.typingRefreshIntervalMs);
-        if (state.typingTimer.unref) state.typingTimer.unref();
-        state.thinkingPromise = ctx.reply(
-            `${agent.emoji} ${agent.name}\n\n⏳ Thinking...`,
-            Markup.inlineKeyboard([
-                [Markup.button.callback('🛑 Stop', 'action:stop')]
-            ])
-        ).then((thinkingMsg) => {
-            if (thinkingMsg) state.thinkingMsgId = thinkingMsg.message_id;
-        }).catch(e => {
-            console.error('[ActionExecutor] Failed to send thinking placeholder:', e.message);
-        });
+        if (typeof ctx?.sendChatAction === 'function') {
+            ctx.sendChatAction('typing').catch(() => {});
+            state.typingTimer = setInterval(() => ctx.sendChatAction('typing').catch(() => {}), config.typingRefreshIntervalMs);
+            if (state.typingTimer.unref) state.typingTimer.unref();
+        }
+        if (typeof ctx?.reply === 'function') {
+            state.thinkingPromise = ctx.reply(
+                `${agent.emoji} ${agent.name}\n\n⏳ Thinking...`,
+                Markup.inlineKeyboard([
+                    [Markup.button.callback('🛑 Stop', 'action:stop')]
+                ])
+            ).then((thinkingMsg) => {
+                if (thinkingMsg) state.thinkingMsgId = thinkingMsg.message_id;
+            }).catch(e => {
+                console.error('[ActionExecutor] Failed to send thinking placeholder:', e.message);
+            });
+        }
 
         // Send message to agent
         try {
@@ -1521,11 +1525,11 @@ class ActionExecutor {
         ]);
 
         let reusedPlaceholder = false;
-        if (state.thinkingMsgId && chunks.length === 1) {
+        if (state.thinkingMsgId && chunks.length === 1 && state.ctx?.telegram?.editMessageText) {
             const htmlText = markdownToTelegramHtml(chunks[0]);
             try {
                 await state.ctx.telegram.editMessageText(
-                    state.ctx.chat.id,
+                    state.ctx.chat?.id,
                     state.thinkingMsgId,
                     null,
                     htmlText,
@@ -1535,7 +1539,7 @@ class ActionExecutor {
             } catch {
                 try {
                     await state.ctx.telegram.editMessageText(
-                        state.ctx.chat.id,
+                        state.ctx.chat?.id,
                         state.thinkingMsgId,
                         null,
                         chunks[0],
@@ -1547,19 +1551,21 @@ class ActionExecutor {
         }
 
         if (!reusedPlaceholder) {
-            if (state.thinkingMsgId) {
+            if (state.thinkingMsgId && state.ctx?.telegram?.deleteMessage) {
                 await state.ctx.telegram.deleteMessage(
-                    state.ctx.chat.id, state.thinkingMsgId
+                    state.ctx.chat?.id, state.thinkingMsgId
                 ).catch(() => {});
             }
             for (let i = 0; i < chunks.length; i++) {
                 const isLast = i === chunks.length - 1;
                 const keyboard = isLast ? actionKeyboard : {};
                 const htmlText = markdownToTelegramHtml(chunks[i]);
-                await state.ctx.reply(htmlText, { parse_mode: 'HTML', ...keyboard }).catch(e => {
-                    state.ctx.reply(chunks[i], keyboard).catch(() => {});
-                    console.error('[ActionExecutor] Final reply failed:', e.message);
-                });
+                if (typeof state.ctx?.reply === 'function') {
+                    await state.ctx.reply(htmlText, { parse_mode: 'HTML', ...keyboard }).catch(e => {
+                        state.ctx.reply(chunks[i], keyboard).catch(() => {});
+                        console.error('[ActionExecutor] Final reply failed:', e.message);
+                    });
+                }
             }
         }
 
@@ -1599,17 +1605,19 @@ class ActionExecutor {
         clearTimeout(state.pendingTimer);
         if (state.thinkingPromise) await state.thinkingPromise.catch(() => {});
 
-        if (state.thinkingMsgId) {
+        if (state.thinkingMsgId && state.ctx?.telegram?.deleteMessage) {
             await state.ctx.telegram.deleteMessage(
-                state.ctx.chat.id, state.thinkingMsgId
+                state.ctx.chat?.id, state.thinkingMsgId
             ).catch(() => {});
         }
 
         // Error recovery keyboard
-        await state.ctx.reply(`❌ Error: ${event.error}`, Markup.inlineKeyboard([
-            [Markup.button.callback('🔄 Retry', 'action:retry'),
-             Markup.button.callback('🆕 New Session', 'session:new')],
-        ])).catch(() => {});
+        if (typeof state.ctx?.reply === 'function') {
+            await state.ctx.reply(`❌ Error: ${event.error}`, Markup.inlineKeyboard([
+                [Markup.button.callback('🔄 Retry', 'action:retry'),
+                 Markup.button.callback('🆕 New Session', 'session:new')],
+            ])).catch(() => {});
+        }
         this._cleanup(state);
     }
 
@@ -1643,17 +1651,19 @@ class ActionExecutor {
         const text = `${agent.emoji} ${agent.name} (streaming...)\n\n${truncated}`;
 
         try {
-            await state.ctx.telegram.editMessageText(
-                state.ctx.chat.id,
-                state.thinkingMsgId,
-                null,
-                text,
-                {
-                    reply_markup: Markup.inlineKeyboard([
-                        [Markup.button.callback('🛑 Stop', 'action:stop')]
-                    ]).reply_markup,
-                }
-            );
+            if (state.ctx?.telegram?.editMessageText) {
+                await state.ctx.telegram.editMessageText(
+                    state.ctx.chat?.id,
+                    state.thinkingMsgId,
+                    null,
+                    text,
+                    {
+                        reply_markup: Markup.inlineKeyboard([
+                            [Markup.button.callback('🛑 Stop', 'action:stop')]
+                        ]).reply_markup,
+                    }
+                );
+            }
         } catch (e) {
             if (!e.message?.includes('message is not modified')) {
                 console.error('[ActionExecutor] Edit failed:', e.message);
