@@ -5,7 +5,8 @@ function getDashboardHtml(token, chatId) {
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
 <title>ClaudeClaw Mission Control</title>
-<script src="https://cdn.tailwindcss.com">
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
 async function openProviderSettingsModal() {
   var overlay = document.getElementById('provider-overlay');
   var modal = document.getElementById('provider-modal');
@@ -1663,14 +1664,24 @@ async function loadSummary() {
       api('/api/memories?chatId=' + CHAT_ID),
     ]);
     const bar = document.getElementById('summary-bar');
-    bar.style.display = '';
-    document.getElementById('sum-messages').textContent = tokens.stats.todayTurns || '0';
-    const activeCount = agents.agents ? agents.agents.filter(a => a.running).length : 0;
-    document.getElementById('sum-agents').textContent = activeCount + '/' + (agents.agents ? agents.agents.length : 0);
-    var totalTokens = (tokens.stats.todayInput || 0) + (tokens.stats.todayOutput || 0);
-    document.getElementById('sum-cost').textContent = totalTokens > 1000 ? Math.round(totalTokens / 1000) + 'k' : totalTokens.toString();
-    document.getElementById('sum-memories').textContent = mems.stats.total || '0';
-  } catch {}
+    if (bar) bar.style.display = '';
+    const sumMessages = document.getElementById('sum-messages');
+    if (sumMessages) sumMessages.textContent = (tokens && tokens.stats && tokens.stats.todayTurns) || '0';
+    const sumAgents = document.getElementById('sum-agents');
+    if (sumAgents) {
+      const activeCount = agents && agents.agents ? agents.agents.filter(a => a.running).length : 0;
+      sumAgents.textContent = activeCount + '/' + (agents && agents.agents ? agents.agents.length : 0);
+    }
+    const sumCost = document.getElementById('sum-cost');
+    if (sumCost) {
+      var totalTokens = (tokens && tokens.stats && ((tokens.stats.todayInput || 0) + (tokens.stats.todayOutput || 0))) || 0;
+      sumCost.textContent = totalTokens > 1000 ? Math.round(totalTokens / 1000) + 'k' : totalTokens.toString();
+    }
+    const sumMemories = document.getElementById('sum-memories');
+    if (sumMemories) {
+      sumMemories.textContent = (mems && mems.stats && mems.stats.total !== undefined) ? mems.stats.total : (mems && mems.memories ? mems.memories.length : '0');
+    }
+  } catch(e) { console.warn('loadSummary error:', e); }
 }
 
 // ── Mission Control ──────────────────────────────────────────────────
@@ -1738,7 +1749,6 @@ async function loadMissionControl() {
       });
 
       board.innerHTML = html;
-    }
   } catch(e) {
     console.error('Mission load error:', e);
   }

@@ -197,6 +197,12 @@ class MissionControlServer {
                     satellites: globalSatelliteHub.getStatus(),
                     uptimeSeconds: Math.floor(process.uptime()),
                     timestamp: Date.now(),
+                    contextPct: 15,
+                    turns: 0,
+                    compactions: 0,
+                    sessionAge: 'active',
+                    waConnected: false,
+                    slackConnected: false,
                 });
             }
 
@@ -383,6 +389,25 @@ class MissionControlServer {
                 }
             }
 
+            // Scheduled Cron Tasks (GET /api/tasks)
+            if (pathname === '/api/tasks') {
+                const tasks = (this.db.getScheduledTasks ? this.db.getScheduledTasks(query.chatId) : []) || [];
+                return this._sendJson(res, 200, { tasks });
+            }
+
+            // Summary Metrics: /api/summary
+            if (pathname === '/api/summary') {
+                const agentsList = Object.keys(this.agents);
+                const activeAgentKey = this.sessionStore?.getActiveAgent() || 'antigravity';
+                const missionTasks = this.db.getMissionTasks() || [];
+                return this._sendJson(res, 200, {
+                    ok: true,
+                    agentsCount: agentsList.length,
+                    activeAgent: activeAgentKey,
+                    tasksCount: missionTasks.length,
+                });
+            }
+
             // Single Mission Task Route: /api/mission/tasks/:id
             if (pathname.startsWith('/api/mission/tasks/')) {
                 const parts = pathname.split('/');
@@ -427,21 +452,63 @@ class MissionControlServer {
             }
 
             // 5. Memories
+            if (pathname === '/api/memories/pinned') {
+                const chatId = query.chatId || '';
+                const memories = this.db.getMemories(chatId, { minSalience: 0.8, limit: 30 }) || [];
+                return this._sendJson(res, 200, { memories });
+            }
+            if (pathname === '/api/memories/list') {
+                const chatId = query.chatId || '';
+                const limit = Number(query.limit) || 30;
+                const offset = Number(query.offset) || 0;
+                const memories = this.db.getMemories(chatId, { limit: limit + offset }) || [];
+                const page = memories.slice(offset, offset + limit);
+                return this._sendJson(res, 200, { memories: page, total: memories.length });
+            }
             if (pathname.startsWith('/api/memories')) {
                 const chatId = query.chatId || '';
                 const memories = this.db.getMemories(chatId, {
                     minSalience: Number(query.minSalience) || 0.1,
                     limit: Number(query.limit) || 50,
+                }) || [];
+                const total = memories.length;
+                const pinned = memories.filter(m => (m.salience || 0) >= 0.8).length;
+                return this._sendJson(res, 200, {
+                    memories,
+                    stats: {
+                        total: total || 0,
+                        pinned: pinned || 0,
+                        consolidations: 0,
+                        importanceDistribution: [
+                            { bucket: '0-0.2', count: memories.filter(m => (m.importance || 0) < 0.2).length },
+                            { bucket: '0.2-0.4', count: memories.filter(m => (m.importance || 0) >= 0.2 && (m.importance || 0) < 0.4).length },
+                            { bucket: '0.4-0.6', count: memories.filter(m => (m.importance || 0) >= 0.4 && (m.importance || 0) < 0.6).length },
+                            { bucket: '0.6-0.8', count: memories.filter(m => (m.importance || 0) >= 0.6 && (m.importance || 0) < 0.8).length },
+                            { bucket: '0.8-1.0', count: memories.filter(m => (m.importance || 0) >= 0.8).length },
+                        ],
+                    },
+                    fading: memories.filter(m => (m.salience || 0) < 0.4).slice(0, 5),
+                    topAccessed: memories.slice().sort((a, b) => (b.access_count || 0) - (a.access_count || 0)).slice(0, 5),
+                    consolidations: [],
                 });
-                return this._sendJson(res, 200, { memories });
             }
 
             // 6. Token Usage
             if (pathname === '/api/tokens') {
                 const stats = {};
+                let todayInput = 0;
+                let todayOutput = 0;
+                let todayTurns = 0;
                 for (const agentKey of Object.keys(this.agents)) {
-                    stats[agentKey] = this.db.getUsage(agentKey);
+                    const u = this.db.getUsage(agentKey) || {};
+                    stats[agentKey] = u;
+                    todayInput += Number(u.inputTokens || 0);
+                    todayOutput += Number(u.outputTokens || 0);
+                    todayTurns += Number(u.totalRequests || 0);
                 }
+                stats.todayInput = todayInput;
+                stats.todayOutput = todayOutput;
+                stats.todayTurns = todayTurns;
                 return this._sendJson(res, 200, { stats });
             }
 
