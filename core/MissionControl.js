@@ -583,6 +583,21 @@ class MissionControlServer {
                                 configured: !!process.env.GEMINI_API_KEY,
                                 masked: mask(process.env.GEMINI_API_KEY),
                                 label: 'Google Gemini'
+                            },
+                            daily: {
+                                configured: !!process.env.DAILY_API_KEY,
+                                masked: mask(process.env.DAILY_API_KEY),
+                                label: 'Daily.co (Live Voice / Video Rooms)'
+                            },
+                            recall: {
+                                configured: !!process.env.RECALL_API_KEY,
+                                masked: mask(process.env.RECALL_API_KEY),
+                                label: 'Recall.ai (Google Meet Voice Bot)'
+                            },
+                            pika: {
+                                configured: !!process.env.PIKA_API_KEY,
+                                masked: mask(process.env.PIKA_API_KEY),
+                                label: 'Pika (AI Video Avatar)'
                             }
                         }
                     });
@@ -603,6 +618,9 @@ class MissionControlServer {
                         GROQ_API_KEY: body.groqApiKey,
                         OLLAMA_BASE_URL: body.ollamaBaseUrl,
                         GEMINI_API_KEY: body.geminiApiKey,
+                        DAILY_API_KEY: body.dailyApiKey,
+                        RECALL_API_KEY: body.recallApiKey,
+                        PIKA_API_KEY: body.pikaApiKey,
                     };
 
                     for (const [key, val] of Object.entries(keysToUpdate)) {
@@ -663,19 +681,59 @@ class MissionControlServer {
             }
             if (pathname === '/api/meetings/dispatch' && req.method === 'POST') {
                 const body = await this._readBody(req);
+                const provider = body.provider || 'daily';
+                const agentId = body.agentId || 'claude';
+                let meetUrl = body.meetUrl && body.meetUrl.trim();
+
+                // If Daily.co mode and no custom URL provided, provision a real room
+                if (!meetUrl && provider === 'daily') {
+                    if (process.env.DAILY_API_KEY) {
+                        try {
+                            const dailyRes = await fetch('https://api.daily.co/v1/rooms', {
+                                method: 'POST',
+                                headers: {
+                                    'Content-Type': 'application/json',
+                                    'Authorization': `Bearer ${process.env.DAILY_API_KEY.trim()}`,
+                                },
+                                body: JSON.stringify({
+                                    properties: {
+                                        exp: Math.floor(Date.now() / 1000) + 7200,
+                                        enable_chat: true,
+                                        enable_screenshare: true,
+                                    },
+                                }),
+                            });
+                            const dailyData = await dailyRes.json();
+                            if (dailyData.url) {
+                                meetUrl = dailyData.url;
+                            }
+                        } catch (err) {
+                            console.warn('[Daily.co] Room provision error:', err.message);
+                        }
+                    }
+                    // Fallback to instant live WebRTC room that works immediately without 404
+                    if (!meetUrl) {
+                        const roomCode = `ClaudeClaw-${agentId}-${Date.now().toString(36)}`;
+                        meetUrl = `https://meet.jit.si/${roomCode}#config.startWithVideoMuted=true`;
+                    }
+                } else if (!meetUrl) {
+                    const roomCode = `ClaudeClaw-${agentId}-${Date.now().toString(36)}`;
+                    meetUrl = `https://meet.jit.si/${roomCode}#config.startWithVideoMuted=true`;
+                }
+
                 const session = {
                     id: `meet_${Date.now()}`,
-                    provider: body.provider || 'daily',
-                    agentId: body.agentId || 'claude',
-                    meetUrl: body.meetUrl || `https://daily.co/room-${Date.now().toString(36)}`,
+                    provider: provider,
+                    agentId: agentId,
+                    meetUrl: meetUrl,
                     mode: body.mode || 'direct',
                     autoBrief: !!body.autoBrief,
-                    status: 'connecting',
+                    status: 'live',
                     createdAt: Date.now(),
                 };
                 this._meetingSessions = this._meetingSessions || [];
                 this._meetingSessions.unshift(session);
-                this.db.recordHiveMind(session.agentId, 'live_meetings', 'agent_dispatched', `Dispatched ${session.agentId} to ${session.provider} meeting: ${session.meetUrl}`);
+                this.db.recordHiveMind(session.agentId, 'live_meetings', 'meeting_active', `Agent ${session.agentId} live in ${session.provider} room: ${session.meetUrl}`);
                 this.broadcast('meeting.dispatched', session);
                 return this._sendJson(res, 200, { ok: true, session });
             }

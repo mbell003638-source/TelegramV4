@@ -38,6 +38,9 @@ async function openProviderSettingsModal() {
     setBadge('openai', p.openai);
     setBadge('deepseek', p.deepseek);
     setBadge('groq', p.groq);
+    setBadge('daily', p.daily);
+    setBadge('recall', p.recall);
+    setBadge('pika', p.pika);
     if (p.ollama && p.ollama.baseUrl) document.getElementById('url-ollama').value = p.ollama.baseUrl;
     if (p.openai && p.openai.baseUrl) document.getElementById('url-openai').value = p.openai.baseUrl;
   } catch(e) { console.error('Failed to load provider settings:', e); }
@@ -65,6 +68,9 @@ async function saveProviderSettings() {
     openaiBaseUrl: document.getElementById('url-openai').value.trim() || undefined,
     deepseekApiKey: document.getElementById('key-deepseek').value.trim() || undefined,
     groqApiKey: document.getElementById('key-groq').value.trim() || undefined,
+    dailyApiKey: document.getElementById('key-daily').value.trim() || undefined,
+    recallApiKey: document.getElementById('key-recall').value.trim() || undefined,
+    pikaApiKey: document.getElementById('key-pika').value.trim() || undefined,
     ollamaBaseUrl: document.getElementById('url-ollama').value.trim() || undefined,
   };
   
@@ -83,6 +89,9 @@ async function saveProviderSettings() {
       document.getElementById('key-openai').value = '';
       document.getElementById('key-deepseek').value = '';
       document.getElementById('key-groq').value = '';
+      document.getElementById('key-daily').value = '';
+      document.getElementById('key-recall').value = '';
+      document.getElementById('key-pika').value = '';
       setTimeout(() => { closeProviderSettingsModal(); loadAgents(); }, 1000);
     } else {
       status.innerHTML = '<span style="color:#f87171">' + (data.error || 'Save failed') + '</span>';
@@ -366,16 +375,17 @@ async function saveProviderSettings() {
         <span class="text-xs font-bold text-emerald-400">Daily.co mode &middot; Pipecat + Gemini Live</span>
         <span class="text-xs text-gray-500">Creates a Daily room, share the link with whoever...</span>
       </div>
-      <div class="flex items-center gap-3">
+      <div class="flex flex-wrap items-center gap-3">
         <select id="daily-agent-select" style="background:#1f1f1f;border:1px solid #333;border-radius:6px;padding:6px 10px;color:#fff;font-size:12px;outline:none"></select>
         <select id="daily-mode-select" style="background:#1f1f1f;border:1px solid #333;border-radius:6px;padding:6px 10px;color:#fff;font-size:12px;outline:none">
           <option value="direct">Direct</option>
           <option value="roundtable">Roundtable</option>
         </select>
-        <label class="flex items-center gap-1.5 text-xs text-gray-300" style="cursor:pointer">
+        <input type="text" id="daily-url-input" placeholder="Existing Room URL (optional, leave empty for instant room)" style="flex:1;min-width:200px;background:#111;border:1px solid #333;border-radius:6px;padding:6px 10px;color:#fff;font-size:12px;outline:none">
+        <label class="flex items-center gap-1.5 text-xs text-gray-300" style="cursor:pointer;white-space:nowrap">
           <input type="checkbox" id="daily-autobrief" checked> Auto-brief
         </label>
-        <button onclick="dispatchMeeting('daily')" style="background:#10b981;color:#fff;border:none;border-radius:6px;padding:6px 16px;font-size:12px;font-weight:600;cursor:pointer">Create room & dispatch</button>
+        <button onclick="dispatchMeeting('daily')" style="background:#10b981;color:#fff;border:none;border-radius:6px;padding:6px 16px;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap">Create room & dispatch</button>
       </div>
     </div>
 
@@ -2233,6 +2243,8 @@ async function dispatchMeeting(provider) {
   } else if (provider === 'daily') {
     const el = document.getElementById('daily-agent-select');
     if (el) agentId = el.value;
+    const urlEl = document.getElementById('daily-url-input');
+    if (urlEl) meetUrl = urlEl.value.trim();
     const mEl = document.getElementById('daily-mode-select');
     if (mEl) mode = mEl.value;
     const bEl = document.getElementById('daily-autobrief');
@@ -2747,6 +2759,38 @@ async function abortProcessing() {
     <div style="background:#1a1a1a;border:1px solid #2a2a2a;border-radius:8px;padding:10px">
       <label class="font-bold text-gray-200 block mb-1">Local LLM Base URL (Ollama, LM Studio, vLLM)</label>
       <input type="text" id="url-ollama" placeholder="http://localhost:11434/v1" style="width:100%;background:#111;border:1px solid #333;border-radius:6px;padding:6px 10px;color:#fff;font-size:12px;outline:none;box-sizing:border-box">
+    </div>
+
+    <!-- Live Meetings & Voice Standup Providers -->
+    <div style="padding-top:6px;border-top:1px solid #2a2a2a">
+      <span class="text-xs font-bold text-gray-400 uppercase tracking-wider">Live Meetings & Standup Providers</span>
+    </div>
+
+    <!-- Daily.co -->
+    <div style="background:#1a1a1a;border:1px solid #2a2a2a;border-radius:8px;padding:10px">
+      <div class="flex justify-between items-center mb-1">
+        <label class="font-bold text-gray-200">Daily.co API Key <span class="text-gray-500 font-normal">(Video/WebRTC Room Provisioning)</span></label>
+        <span id="daily-badge" class="pill" style="font-size:9px">Not configured</span>
+      </div>
+      <input type="password" id="key-daily" placeholder="Daily.co API Key (optional — instant WebRTC fallback active)" style="width:100%;background:#111;border:1px solid #333;border-radius:6px;padding:6px 10px;color:#fff;font-size:12px;outline:none;box-sizing:border-box">
+    </div>
+
+    <!-- Recall.ai -->
+    <div style="background:#1a1a1a;border:1px solid #2a2a2a;border-radius:8px;padding:10px">
+      <div class="flex justify-between items-center mb-1">
+        <label class="font-bold text-gray-200">Recall.ai API Key <span class="text-gray-500 font-normal">(Meeting Bot Dispatch for Zoom/Meet/Teams)</span></label>
+        <span id="recall-badge" class="pill" style="font-size:9px">Not configured</span>
+      </div>
+      <input type="password" id="key-recall" placeholder="Recall.ai API Key" style="width:100%;background:#111;border:1px solid #333;border-radius:6px;padding:6px 10px;color:#fff;font-size:12px;outline:none;box-sizing:border-box">
+    </div>
+
+    <!-- Pika -->
+    <div style="background:#1a1a1a;border:1px solid #2a2a2a;border-radius:8px;padding:10px">
+      <div class="flex justify-between items-center mb-1">
+        <label class="font-bold text-gray-200">Pika API Key <span class="text-gray-500 font-normal">(AI Avatar Video Generation)</span></label>
+        <span id="pika-badge" class="pill" style="font-size:9px">Not configured</span>
+      </div>
+      <input type="password" id="key-pika" placeholder="Pika API Key" style="width:100%;background:#111;border:1px solid #333;border-radius:6px;padding:6px 10px;color:#fff;font-size:12px;outline:none;box-sizing:border-box">
     </div>
 
     <div class="pt-3 border-t border-gray-800 flex justify-between items-center">
