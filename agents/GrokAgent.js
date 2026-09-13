@@ -192,19 +192,31 @@ class GrokAgent extends BaseAgent {
         }
 
         const isWin = process.platform === 'win32';
-        const workspaceRoot = process.env.WORKSPACE_ROOT || process.cwd();
+        const workspaceRoot = (this.sessionStore && typeof this.sessionStore.getWorkspaceCwd === 'function')
+            ? this.sessionStore.getWorkspaceCwd('grok', chatId)
+            : ((process.env.WORKSPACE_ROOT && fs.existsSync(process.env.WORKSPACE_ROOT)) ? process.env.WORKSPACE_ROOT : process.cwd());
+
+        const pathSep = path.delimiter;
+        const currentPath = process.env.PATH || process.env.Path || '';
+        const extraDirs = [
+            path.join(os.homedir(), '.local', 'bin'),
+            path.join(os.homedir(), '.grok', 'bin'),
+            path.join(os.homedir(), '.npm-global', 'bin'),
+        ];
         const env = {
             ...process.env,
             CI: 'true',
-            PATH: (os.homedir() + '/.local/bin:' + os.homedir() + '/.npm-global/bin:' + (process.env.PATH || ''))
+            PATH: [...extraDirs, currentPath].join(pathSep)
         };
+
+        const useShell = isWin && (this.grokPath.endsWith('.cmd') || this.grokPath.endsWith('.bat'));
 
         return new Promise((resolve) => {
             this.process = spawn(this.grokPath, args, {
                 cwd: workspaceRoot,
                 env,
                 stdio: ['ignore', 'pipe', 'pipe'],
-                shell: isWin
+                shell: useShell
             });
 
             let buffer = '';

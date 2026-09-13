@@ -29,13 +29,17 @@ class AcpAgentBase extends BaseAgent {
         }
         const home = os.homedir();
         const name = this.cliCommand;
+        const isWin = process.platform === 'win32';
         const candidates = [
+            isWin && process.env.APPDATA ? path.join(process.env.APPDATA, 'npm', name + '.cmd') : null,
+            isWin && process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, 'Programs', name, name + '.exe') : null,
+            isWin ? path.join(home, '.grok', 'bin', name + '.exe') : null,
             path.join(home, '.local', 'bin', name),
             path.join(home, '.grok', 'bin', name),
             path.join(home, '.npm-global', 'bin', name),
             '/usr/local/bin/' + name,
             '/usr/bin/' + name,
-        ];
+        ].filter(Boolean);
         for (const candidate of candidates) {
             if (candidate && fs.existsSync(candidate)) return candidate;
         }
@@ -48,11 +52,18 @@ class AcpAgentBase extends BaseAgent {
 
     acpEnv() {
         const home = os.homedir();
+        const pathSep = path.delimiter;
+        const currentPath = process.env.PATH || process.env.Path || '';
         return {
             ...process.env,
             CI: 'true',
             GROK_DISABLE_AUTOUPDATER: '1',
-            PATH: `${home}/.local/bin:${home}/.grok/bin:${home}/.npm-global/bin:${process.env.PATH || ''}`,
+            PATH: [
+                path.join(home, '.local', 'bin'),
+                path.join(home, '.grok', 'bin'),
+                path.join(home, '.npm-global', 'bin'),
+                currentPath
+            ].join(pathSep),
         };
     }
 
@@ -61,15 +72,18 @@ class AcpAgentBase extends BaseAgent {
         if (this._connectPromise) return this._connectPromise;
 
         this._connectPromise = (async () => {
-            const workspaceRoot = process.env.WORKSPACE_ROOT || process.cwd();
+            const workspaceRoot = this.workspaceCwd();
             const bin = this.resolveBin();
             console.log(`[${this.name}] Starting ACP: ${bin} ${this.cliArgs.join(' ')}`);
+
+            const isWin = process.platform === 'win32';
+            const useShell = isWin && (bin.endsWith('.cmd') || bin.endsWith('.bat'));
 
             this.child = spawn(bin, this.cliArgs, {
                 cwd: workspaceRoot,
                 env: this.acpEnv(),
                 stdio: ['pipe', 'pipe', 'pipe'],
-                shell: process.platform === 'win32'
+                shell: useShell
             });
             this.process = this.child;
 
