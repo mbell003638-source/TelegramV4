@@ -215,13 +215,15 @@ class MissionControlServer {
                     const activeModel = this.sessionStore?.getActiveModel(key, chatId) || 'default';
                     const availableModels = this.sessionStore?.getAvailableModels(key) || [];
                     const isActive = key === activeAgentKey;
+                    const usage = this.db.getUsage ? this.db.getUsage(key) : {};
                     return {
                         id: key,
                         name: a.name || key,
                         emoji: a.emoji || '🤖',
-                        status: isActive ? 'live' : 'ready',
+                        status: 'live',
                         active: isActive,
-                        running: isActive || !!a.isWarm,
+                        running: true,
+                        todayTurns: Number(usage?.totalRequests || 0),
                         model: activeModel,
                         availableModels: availableModels,
                         description: `CLI engine adapter for ${a.name}`,
@@ -622,7 +624,63 @@ class MissionControlServer {
                 }
             }
 
-            // 8. Chat Send (Dashboard Web Chat)
+            // 8. War Room Voice Settings (Gemini Live / Cartesia)
+            if (pathname === '/api/warroom/voices') {
+                if (req.method === 'GET') {
+                    const defaultVoices = {
+                        antigravity: 'Charon (Informative)',
+                        opencode: 'Aoede (Breezy)',
+                        codex: 'Alnilam (Firm)',
+                        claude: 'Charon (Informative)',
+                        openclaw: 'Leda (Youthful)',
+                        hermes: 'Kore (Firm)',
+                        pi: 'Puck (Playful)',
+                        grok: 'Fenrir (Deep)',
+                    };
+                    return this._sendJson(res, 200, { voices: this._warRoomVoices || defaultVoices });
+                }
+                if (req.method === 'POST') {
+                    const body = await this._readBody(req);
+                    this._warRoomVoices = Object.assign(this._warRoomVoices || {}, body.voices || {});
+                    this.broadcast('warroom.voices_updated', this._warRoomVoices);
+                    return this._sendJson(res, 200, { ok: true, voices: this._warRoomVoices });
+                }
+            }
+
+            // 8b. War Room Standup Trigger
+            if (pathname === '/api/warroom/standup' && req.method === 'POST') {
+                const sessionId = `standup_${Date.now()}`;
+                this.db.recordHiveMind('system', 'war_room', 'standup_started', 'Voice standup meeting convened with agent swarm.');
+                this.broadcast('warroom.standup_started', { sessionId, timestamp: Date.now() });
+                return this._sendJson(res, 200, { ok: true, sessionId, message: 'War room voice standup convened.' });
+            }
+
+            // 9. Live Meetings Dispatch (Pika, Recall.ai, Daily.co)
+            if (pathname === '/api/meetings') {
+                if (req.method === 'GET') {
+                    return this._sendJson(res, 200, { sessions: this._meetingSessions || [] });
+                }
+            }
+            if (pathname === '/api/meetings/dispatch' && req.method === 'POST') {
+                const body = await this._readBody(req);
+                const session = {
+                    id: `meet_${Date.now()}`,
+                    provider: body.provider || 'daily',
+                    agentId: body.agentId || 'claude',
+                    meetUrl: body.meetUrl || `https://daily.co/room-${Date.now().toString(36)}`,
+                    mode: body.mode || 'direct',
+                    autoBrief: !!body.autoBrief,
+                    status: 'connecting',
+                    createdAt: Date.now(),
+                };
+                this._meetingSessions = this._meetingSessions || [];
+                this._meetingSessions.unshift(session);
+                this.db.recordHiveMind(session.agentId, 'live_meetings', 'agent_dispatched', `Dispatched ${session.agentId} to ${session.provider} meeting: ${session.meetUrl}`);
+                this.broadcast('meeting.dispatched', session);
+                return this._sendJson(res, 200, { ok: true, session });
+            }
+
+            // 10. Chat Send (Dashboard Web Chat)
             if (pathname === '/api/chat/send' && req.method === 'POST') {
                 const body = await this._readBody(req);
                 const text = body.message || body.text || '';

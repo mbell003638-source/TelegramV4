@@ -301,6 +301,92 @@ async function saveProviderSettings() {
   <div id="agents-container" class="flex flex-wrap gap-3"></div>
 </div>
 
+<!-- War Room Section -->
+<div id="warroom-section" class="mb-5">
+  <div class="card" style="margin-bottom:12px;border:1px solid #1e293b;background:linear-gradient(180deg,#111827 0%,#0f172a 100%)">
+    <div class="flex items-center justify-between">
+      <div>
+        <div class="flex items-center gap-2">
+          <span style="font-size:18px">🎙️</span>
+          <h3 class="text-base font-bold text-white">War Room</h3>
+        </div>
+        <p class="text-xs text-gray-400 mt-0.5">Voice standup with your agent team</p>
+      </div>
+      <button onclick="startWarRoomStandup()" style="background:#2563eb;color:#fff;border:none;border-radius:8px;padding:8px 16px;font-size:12px;font-weight:600;cursor:pointer;display:flex;align-items:center;gap:6px;box-shadow:0 4px 12px rgba(37,99,235,0.3)">
+        <span>🎙️</span> Start Voice Standup
+      </button>
+    </div>
+  </div>
+
+  <!-- War Room Voices -->
+  <div class="card" style="margin-bottom:12px">
+    <h3 class="text-sm font-bold text-gray-200 mb-1">War Room Voices</h3>
+    <p class="text-xs text-gray-400 mb-4">Per-agent Gemini Live voice config. Main keeps Charon unless you change it.</p>
+    <div id="warroom-voices-list" class="space-y-2"></div>
+  </div>
+</div>
+
+<!-- Live Meetings Section -->
+<div id="meetings-section" class="mb-5">
+  <div class="card">
+    <div class="mb-3">
+      <h3 class="text-base font-bold text-white">Live Meetings</h3>
+      <p class="text-xs text-gray-400">Send an agent into a Google Meet. Pick avatar or voice-only below.</p>
+    </div>
+
+    <!-- Avatar mode · Pika -->
+    <div style="background:#141414;border:1px solid #2a2a2a;border-radius:10px;padding:12px;margin-bottom:12px">
+      <div class="flex items-center justify-between mb-2">
+        <span class="text-xs font-bold text-blue-400">Avatar mode &middot; Pika</span>
+        <span class="text-xs text-gray-500">Real-time AI avatar, ~$0.28/m</span>
+      </div>
+      <div class="flex gap-2">
+        <select id="pika-agent-select" style="background:#1f1f1f;border:1px solid #333;border-radius:6px;padding:6px 10px;color:#fff;font-size:12px;outline:none"></select>
+        <input type="text" id="pika-url-input" placeholder="Paste Meet URL, or leave empty to auto-read clipboard" style="flex:1;background:#111;border:1px solid #333;border-radius:6px;padding:6px 10px;color:#fff;font-size:12px;outline:none">
+        <button onclick="dispatchMeeting('pika')" style="background:#2563eb;color:#fff;border:none;border-radius:6px;padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer">Dispatch</button>
+      </div>
+    </div>
+
+    <!-- Voice-only mode · Recall.ai -->
+    <div style="background:#141414;border:1px solid #2a2a2a;border-radius:10px;padding:12px;margin-bottom:12px">
+      <div class="flex items-center justify-between mb-2">
+        <span class="text-xs font-bold text-purple-400">Voice-only mode &middot; Recall.ai</span>
+        <span class="text-xs text-gray-500">Joins an existing Google Meet</span>
+      </div>
+      <div class="flex gap-2">
+        <select id="recall-agent-select" style="background:#1f1f1f;border:1px solid #333;border-radius:6px;padding:6px 10px;color:#fff;font-size:12px;outline:none"></select>
+        <input type="text" id="recall-url-input" placeholder="Paste Meet URL, or leave empty to auto-read clipboard" style="flex:1;background:#111;border:1px solid #333;border-radius:6px;padding:6px 10px;color:#fff;font-size:12px;outline:none">
+        <button onclick="dispatchMeeting('recall')" style="background:#7c3aed;color:#fff;border:none;border-radius:6px;padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer">Dispatch</button>
+      </div>
+    </div>
+
+    <!-- Daily.co mode · Pipecat + Gemini Live -->
+    <div style="background:#141414;border:1px solid #2a2a2a;border-radius:10px;padding:12px;margin-bottom:12px">
+      <div class="flex items-center justify-between mb-2">
+        <span class="text-xs font-bold text-emerald-400">Daily.co mode &middot; Pipecat + Gemini Live</span>
+        <span class="text-xs text-gray-500">Creates a Daily room, share the link with whoever...</span>
+      </div>
+      <div class="flex items-center gap-3">
+        <select id="daily-agent-select" style="background:#1f1f1f;border:1px solid #333;border-radius:6px;padding:6px 10px;color:#fff;font-size:12px;outline:none"></select>
+        <select id="daily-mode-select" style="background:#1f1f1f;border:1px solid #333;border-radius:6px;padding:6px 10px;color:#fff;font-size:12px;outline:none">
+          <option value="direct">Direct</option>
+          <option value="roundtable">Roundtable</option>
+        </select>
+        <label class="flex items-center gap-1.5 text-xs text-gray-300" style="cursor:pointer">
+          <input type="checkbox" id="daily-autobrief" checked> Auto-brief
+        </label>
+        <button onclick="dispatchMeeting('daily')" style="background:#10b981;color:#fff;border:none;border-radius:6px;padding:6px 16px;font-size:12px;font-weight:600;cursor:pointer">Create room & dispatch</button>
+      </div>
+    </div>
+
+    <!-- Active Sessions -->
+    <div class="mt-4 pt-3 border-t border-gray-800">
+      <h4 class="text-xs font-bold text-gray-500 uppercase tracking-wider mb-2">Active Sessions</h4>
+      <div id="meeting-sessions-list" class="text-xs text-gray-500">No active sessions</div>
+    </div>
+  </div>
+</div>
+
 <!-- Hive Mind Feed -->
 <div id="hive-section" class="mb-5">
   <div class="flex items-center justify-between mb-2">
@@ -1094,13 +1180,30 @@ async function loadAgents() {
           modelItems + customOpt +
         '</div>' +
       '</div>';
-      return '<div class="card clickable-card" style="min-width:130px;flex:1;max-width:220px;border-left:3px solid ' + color + '" data-agent="' + a.id + '" onclick="toggleAgentDetail(this.dataset.agent)">' +
-        '<div class="font-bold text-white text-sm">' + a.name + '</div>' +
+      const turns = a.todayTurns !== undefined ? a.todayTurns : 0;
+      const activeBorder = a.active ? 'border: 1px solid #4f46e5;' : '';
+      return '<div class="card clickable-card" style="min-width:130px;flex:1;max-width:220px;border-left:3px solid ' + color + ';' + activeBorder + '" data-agent="' + a.id + '" onclick="toggleAgentDetail(this.dataset.agent)">' +
+        '<div class="flex items-center gap-2 mb-1">' +
+          '<span style="font-size:16px">' + (a.emoji || '🤖') + '</span>' +
+          '<div class="font-bold text-white text-sm" style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + a.name + '</div>' +
+          (a.active ? '<span class="pill pill-active" style="font-size:9px;padding:1px 5px">ACTIVE</span>' : '') +
+        '</div>' +
         '<div class="text-xs mt-1">' + dot + ' ' + statusText + '</div>' +
         modelSelect +
-        (a.running ? '<div class="text-xs text-gray-400 mt-1">' + a.todayTurns + ' turns</div>' : '') +
+        '<div class="text-xs text-gray-400 mt-1">' + turns + ' turns</div>' +
       '</div>';
     }).join('');
+
+    // Populate meeting agent selectors
+    const meetingSelects = ['pika-agent-select', 'recall-agent-select', 'daily-agent-select'];
+    meetingSelects.forEach(selId => {
+      const el = document.getElementById(selId);
+      if (el && data.agents) {
+        const curVal = el.value;
+        el.innerHTML = data.agents.map(a => '<option value="' + a.id + '">' + (a.emoji || '🤖') + ' ' + a.name + '</option>').join('');
+        if (curVal) el.value = curVal;
+      }
+    });
   } catch {}
 }
 
@@ -2052,12 +2155,143 @@ function closeTaskHistory() {
 }
 
 // Poll mission tasks more frequently (every 15s) for responsiveness
-setInterval(loadMissionControl, 15000);
+// ── War Room Voices & Live Meetings ──────────────────────────────────
+const GEMINI_VOICES = [
+  { id: 'Charon (Informative)', name: 'Charon / British Male (informative, confident)' },
+  { id: 'Aoede (Breezy)', name: 'Aoede / American Male (breezy, warm)' },
+  { id: 'Leda (Youthful)', name: 'Leda / British Female (youthful, creative)' },
+  { id: 'Alnilam (Firm)', name: 'Alnilam / American Male (firm, direct)' },
+  { id: 'Kore (Firm)', name: 'Kore / American Female (firm, analytical)' },
+  { id: 'Puck (Playful)', name: 'Puck / British Male (playful, energetic)' },
+  { id: 'Fenrir (Deep)', name: 'Fenrir / American Male (deep, authoritative)' },
+  { id: 'Zephyr (Smooth)', name: 'Zephyr / American Male (smooth, relaxed)' },
+];
+
+let warRoomVoices = {};
+
+async function loadWarRoomVoices() {
+  try {
+    const [voiceData, agentData] = await Promise.all([
+      api('/api/warroom/voices'),
+      api('/api/agents')
+    ]);
+    warRoomVoices = voiceData.voices || {};
+    const agents = agentData.agents || [];
+    const container = document.getElementById('warroom-voices-list');
+    if (!container) return;
+    
+    container.innerHTML = agents.map(a => {
+      const curVoice = warRoomVoices[a.id] || (a.id === 'main' ? 'Charon (Informative)' : 'Aoede (Breezy)');
+      const opts = GEMINI_VOICES.map(v => 
+        '<option value="' + v.id + '"' + (curVoice.startsWith(v.id.split(' ')[0]) ? ' selected' : '') + '>' + v.name + '</option>'
+      ).join('');
+      return '<div class="flex items-center justify-between py-2 border-b border-[#222] last:border-none">' +
+        '<div class="flex items-center gap-2" style="width:140px">' +
+          '<span>' + (a.emoji || '🤖') + '</span>' +
+          '<span class="text-xs font-bold text-gray-300 uppercase">' + a.name + '</span>' +
+        '</div>' +
+        '<select data-agent="' + a.id + '" onchange="changeWarRoomVoice(this.dataset.agent, this.value)" style="flex:1;background:#141414;border:1px solid #333;border-radius:6px;padding:6px 10px;color:#fff;font-size:12px;outline:none">' +
+          opts +
+        '</select>' +
+      '</div>';
+    }).join('');
+  } catch(e) { console.error('Failed to load War Room voices:', e); }
+}
+
+async function changeWarRoomVoice(agentId, voice) {
+  warRoomVoices[agentId] = voice;
+  try {
+    await fetch(BASE + '/api/warroom/voices?token=' + TOKEN, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ voices: { [agentId]: voice } }),
+    });
+  } catch(e) { console.error('Failed to save voice:', e); }
+}
+
+async function startWarRoomStandup() {
+  try {
+    const res = await fetch(BASE + '/api/warroom/standup?token=' + TOKEN, { method: 'POST' });
+    const data = await res.json();
+    alert('🎙️ Voice Standup Convened!\\nAgents connected with Gemini Live voice synthesizers. You can speak now or view logs in Hive Mind.');
+    loadHiveMind();
+  } catch(e) { alert('Standup failed: ' + e.message); }
+}
+
+async function dispatchMeeting(provider) {
+  let agentId = 'claude', meetUrl = '', mode = 'direct', autoBrief = false;
+  if (provider === 'pika') {
+    const el = document.getElementById('pika-agent-select');
+    if (el) agentId = el.value;
+    const urlEl = document.getElementById('pika-url-input');
+    if (urlEl) meetUrl = urlEl.value.trim();
+  } else if (provider === 'recall') {
+    const el = document.getElementById('recall-agent-select');
+    if (el) agentId = el.value;
+    const urlEl = document.getElementById('recall-url-input');
+    if (urlEl) meetUrl = urlEl.value.trim();
+  } else if (provider === 'daily') {
+    const el = document.getElementById('daily-agent-select');
+    if (el) agentId = el.value;
+    const mEl = document.getElementById('daily-mode-select');
+    if (mEl) mode = mEl.value;
+    const bEl = document.getElementById('daily-autobrief');
+    if (bEl) autoBrief = bEl.checked;
+  }
+  
+  try {
+    const res = await fetch(BASE + '/api/meetings/dispatch?token=' + TOKEN, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ provider, agentId, meetUrl, mode, autoBrief })
+    });
+    const data = await res.json();
+    if (data.ok) {
+      alert('✓ ' + provider.toUpperCase() + ' meeting dispatched for agent ' + agentId + '!\\nRoom URL: ' + data.session.meetUrl);
+      loadMeetingSessions();
+      loadHiveMind();
+    }
+  } catch(e) { alert('Failed to dispatch meeting: ' + e.message); }
+}
+
+async function loadMeetingSessions() {
+  try {
+    const res = await api('/api/meetings');
+    const container = document.getElementById('meeting-sessions-list');
+    if (!container) return;
+    if (!res.sessions || res.sessions.length === 0) {
+      container.innerHTML = '<span class="text-gray-600">No active sessions</span>';
+      return;
+    }
+    container.innerHTML = res.sessions.map(s => 
+      '<div class="flex items-center justify-between py-2 border-b border-[#222] last:border-none">' +
+        '<div>' +
+          '<span class="pill pill-running" style="font-size:10px;margin-right:6px">' + s.status + '</span>' +
+          '<span class="text-xs text-white font-semibold">[' + s.provider.toUpperCase() + '] ' + s.agentId + '</span>' +
+          '<div class="text-xs text-blue-400 mt-0.5"><a href="' + escapeHtml(s.meetUrl) + '" target="_blank" class="underline">' + escapeHtml(s.meetUrl) + '</a></div>' +
+        '</div>' +
+        '<span class="text-xs text-gray-500">' + timeAgo(s.createdAt) + '</span>' +
+      '</div>'
+    ).join('');
+  } catch {}
+}
 
 async function refreshAll() {
   const btn = document.getElementById('refresh-btn').querySelector('svg');
   btn.classList.add('refresh-spin');
-  await Promise.all([loadInfo(), loadTasks(), loadMemories(), loadHealth(), loadTokens(), loadAgents(), loadHiveMind(), loadSummary(), loadMissionControl()]);
+  await Promise.all([
+    loadInfo(),
+    loadTasks(),
+    loadMemories(),
+    loadHealth(),
+    loadTokens(),
+    loadAgents(),
+    loadHiveMind(),
+    loadSummary(),
+    loadMissionControl(),
+    loadWarRoomVoices(),
+    loadMeetingSessions()
+  ]);
   btn.classList.remove('refresh-spin');
   document.getElementById('last-updated').textContent = new Date().toLocaleTimeString();
 }
