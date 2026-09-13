@@ -316,7 +316,7 @@ class SessionStore {
             assistantText: String(turn.assistantText || '').slice(0, 2500),
             at: Date.now(),
         });
-        prefs.recentTurns = turns.slice(-4);
+        prefs.recentTurns = turns.slice(-50);
         this._save(this.chatPrefsFile, this.chatPrefs);
     }
 

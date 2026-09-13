@@ -193,7 +193,8 @@ class MissionControlServer {
             // 1. Status & System Info
             if (pathname === '/api/info' || pathname === '/api/status' || pathname === '/api/health') {
                 const chatId = query.chatId || 'dashboard_chat';
-                const activeAgentKey = this.sessionStore?.getActiveAgent(chatId) || 'antigravity';
+                const requestedAgent = (query.agent && this.agents[query.agent]) ? query.agent : null;
+                const activeAgentKey = requestedAgent || this.sessionStore?.getActiveAgent(chatId) || 'antigravity';
                 const agent = this.agents[activeAgentKey];
                 const recentTurns = (this.sessionStore && typeof this.sessionStore.getRecentTurns === 'function')
                     ? this.sessionStore.getRecentTurns(chatId)
@@ -365,11 +366,16 @@ class MissionControlServer {
                 return this._sendJson(res, 200, usage);
             }
 
-            // 2f. Chat History & Conversation
+            // 2f. Chat History & Conversation (Unified multi-agent conversation stream)
             if (pathname === '/api/chat/history' || pathname.match(/^\/api\/agents\/([^/]+)\/conversation$/)) {
                 const chatId = query.chatId || 'dashboard_chat';
                 const match = pathname.match(/^\/api\/agents\/([^/]+)\/conversation$/);
                 const filterAgent = match ? match[1] : null;
+
+                // When an agent is selected via the route, sync activeAgent if valid
+                if (filterAgent && filterAgent !== 'all' && this.agents && this.agents[filterAgent]) {
+                    this.sessionStore?.setActiveAgent(filterAgent, chatId);
+                }
 
                 // 1. Get real turns from sessionStore
                 const recentTurns = (this.sessionStore && typeof this.sessionStore.getRecentTurns === 'function')
@@ -377,7 +383,9 @@ class MissionControlServer {
                     : [];
                 let turns = [];
                 for (const t of recentTurns) {
-                    if (filterAgent && t.agent && t.agent !== filterAgent) continue;
+                    if (query.onlyAgent === 'true' && filterAgent && t.agent && t.agent !== filterAgent) {
+                        continue;
+                    }
                     if (t.userText) {
                         turns.push({ role: 'user', content: t.userText, source: 'user', timestamp: t.at });
                     }
@@ -386,19 +394,7 @@ class MissionControlServer {
                     }
                 }
 
-                // 2. If an agent tab has no turns yet, show the ongoing shared turns so the screen is not blank
-                if (filterAgent && turns.length === 0 && recentTurns.length > 0) {
-                    for (const t of recentTurns) {
-                        if (t.userText) {
-                            turns.push({ role: 'user', content: t.userText, source: 'user', timestamp: t.at });
-                        }
-                        if (t.assistantText) {
-                            turns.push({ role: 'assistant', content: t.assistantText, source: t.agent || 'assistant', timestamp: t.at });
-                        }
-                    }
-                }
-
-                // 3. Also check memories if turns are still empty
+                // 2. Also check memories if turns are still empty
                 if (turns.length === 0) {
                     const memories = this.db?.getMemories(chatId, { limit: Number(query.limit) || 40 }) || [];
                     turns = memories.map(m => ({
@@ -409,7 +405,11 @@ class MissionControlServer {
                     }));
                 }
 
-                return this._sendJson(res, 200, { turns });
+                // Sort chronologically (oldest at index 0, newest at end)
+                turns.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
+
+                const currentActive = this.sessionStore?.getActiveAgent(chatId) || filterAgent || 'antigravity';
+                return this._sendJson(res, 200, { turns, activeAgent: currentActive });
             }
 
             // 3. Mission Tasks (Kanban)

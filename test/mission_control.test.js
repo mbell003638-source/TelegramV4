@@ -65,10 +65,22 @@ test('Database tracks salient memories and decay', () => {
 
 test('MissionControl web server answers API endpoints and accepts tasks', async () => {
     const db = tempDb();
+    let currentActiveAgent = 'antigravity';
     const server = new MissionControlServer({
         database: db,
-        sessionStore: { getActiveAgent: () => 'antigravity' },
-        agents: { antigravity: { name: 'Antigravity', emoji: '🤖' } },
+        sessionStore: {
+            getActiveAgent: () => currentActiveAgent,
+            setActiveAgent: (ag) => { currentActiveAgent = ag; },
+            getRecentTurns: () => [
+                { agent: 'codex', userText: 'turn 1 user', assistantText: 'turn 1 codex', at: 100 },
+                { agent: 'pi', userText: 'turn 2 user', assistantText: 'turn 2 pi', at: 200 },
+            ],
+        },
+        agents: {
+            antigravity: { name: 'Antigravity', emoji: '🤖' },
+            codex: { name: 'Codex', emoji: '💻' },
+            pi: { name: 'Pi', emoji: '🥧' },
+        },
         port: 3159,
         token: 'unit_test_token',
     });
@@ -102,6 +114,25 @@ test('MissionControl web server answers API endpoints and accepts tasks', async 
     assert.equal(listRes.status, 200);
     const list = await listRes.json();
     assert.equal(list.tasks.length, 1);
+
+    // 4. GET /api/agents/pi/conversation preserves cross-agent shared turns
+    const convRes = await fetch('http://localhost:3159/api/agents/pi/conversation?token=unit_test_token');
+    assert.equal(convRes.status, 200);
+    const convData = await convRes.json();
+    assert.equal(convData.turns.length, 4);
+    assert.equal(convData.turns[0].content, 'turn 1 user');
+    assert.equal(convData.turns[1].source, 'codex');
+    assert.equal(convData.turns[2].content, 'turn 2 user');
+    assert.equal(convData.turns[3].source, 'pi');
+    assert.equal(convData.activeAgent, 'pi');
+
+    // 5. GET /api/chat/history returns the identical complete shared history
+    const histRes = await fetch('http://localhost:3159/api/chat/history?token=unit_test_token');
+    assert.equal(histRes.status, 200);
+    const histData = await histRes.json();
+    assert.equal(histData.turns.length, 4);
+    assert.equal(histData.turns[1].source, 'codex');
+    assert.equal(histData.turns[3].source, 'pi');
 
     await server.stop();
 });

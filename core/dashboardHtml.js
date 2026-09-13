@@ -2974,6 +2974,13 @@ function switchAgentTab(agentId, el) {
   activeAgentTab = agentId;
   document.querySelectorAll('.chat-agent-tab').forEach(function(t) { t.classList.remove('active'); });
   if (el) el.classList.add('active');
+  if (agentId && agentId !== 'all') {
+    fetch(BASE + '/api/agents/active?token=' + TOKEN + '&chatId=' + CHAT_ID, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ agentId: agentId })
+    }).catch(function() {});
+  }
   chatHistoryLoaded = false;
   loadChatHistory();
   loadSessionInfo();
@@ -2984,7 +2991,7 @@ async function loadSessionInfo() {
   try {
     const agentId = activeAgentTab === 'all' ? 'main' : activeAgentTab;
     const [health, tokens] = await Promise.all([
-      api('/api/health?chatId=' + CHAT_ID),
+      api('/api/health?chatId=' + CHAT_ID + (activeAgentTab !== 'all' ? '&agent=' + activeAgentTab : '')),
       api('/api/agents/' + agentId + '/tokens'),
     ]);
     document.getElementById('sess-ctx').textContent = (health.contextPct || 0) + '%';
@@ -3013,8 +3020,11 @@ async function loadChatHistory() {
     const container = document.getElementById('chat-messages');
     container.innerHTML = '';
     if (data.turns && data.turns.length > 0) {
-      // Reverse: API returns newest first, we want oldest first
-      const turns = data.turns.slice().reverse();
+      let turns = data.turns.slice();
+      // Ensure turns are displayed chronologically: oldest at top, newest at bottom
+      if (turns.length > 1 && (turns[0].timestamp || 0) > (turns[turns.length - 1].timestamp || 0)) {
+        turns.reverse();
+      }
       turns.forEach(t => appendChatBubble(t.role, t.content, t.source, false));
     }
     chatHistoryLoaded = true;
@@ -3107,7 +3117,7 @@ function appendChatBubble(role, content, source, scroll) {
   bubble.setAttribute('data-content', content);
   bubble.setAttribute('data-source', source || '');
   bubble.innerHTML = role === 'assistant' ? renderMarkdown(content) : escapeHtml(content);
-  if (source && source !== 'telegram' && source !== 'dashboard') {
+  if (role !== 'user' && source && source !== 'telegram' && source !== 'dashboard' && source !== 'user') {
     const srcBadge = document.createElement('div');
     srcBadge.className = 'chat-bubble-source';
     srcBadge.textContent = source.charAt(0).toUpperCase() + source.slice(1);
