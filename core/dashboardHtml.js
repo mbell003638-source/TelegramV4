@@ -159,6 +159,19 @@ async function saveProviderSettings() {
   .mem-expand .mem-full { display: none; margin-top: 4px; color: #d4d4d8; white-space: pre-wrap; word-break: break-word; font-size: 12px; line-height: 1.5; }
   .mem-expand.open .mem-full { display: block; }
   .mem-expand.open .mem-preview { display: none; }
+  /* War Room HUD */
+  .warroom-node { text-align: center; padding: 8px 4px; border-radius: 10px; transition: all 0.25s; background: #10121d; border: 1px solid #1e2438; }
+  .warroom-avatar-ring { width: 44px; height: 44px; border-radius: 50%; border: 2px solid #334155; display: flex; align-items: center; justify-content: center; margin: 0 auto 6px auto; font-size: 20px; transition: all 0.25s; background: #0b0c14; }
+  .warroom-node.speaking { border-color: #10b981; background: #064e3b33; transform: translateY(-2px); }
+  .warroom-node.speaking .warroom-avatar-ring { border-color: #10b981; box-shadow: 0 0 18px rgba(16,185,129,0.85); transform: scale(1.12); }
+  .warroom-name { font-size: 11px; font-weight: 700; color: #cbd5e1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .warroom-node.speaking .warroom-name { color: #34d399; }
+  .warroom-voice-tag { font-size: 10px; color: #64748b; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .warroom-node.speaking .warroom-voice-tag { color: #10b981; font-weight: 600; }
+  .transcript-line { display: flex; gap: 8px; align-items: flex-start; line-height: 1.4; }
+  .transcript-time { color: #64748b; font-size: 10px; min-width: 42px; padding-top: 2px; }
+  .transcript-speaker { font-weight: 700; min-width: 90px; }
+  .transcript-msg { color: #e2e8f0; flex: 1; word-break: break-word; }
   /* Task prompt text */
   .task-prompt { transition: filter 0.2s; cursor: pointer; }
   .device-badge { display: inline-block; padding: 2px 8px; border-radius: 6px; font-size: 10px; font-weight: 600; letter-spacing: 0.5px; }
@@ -2219,13 +2232,356 @@ async function changeWarRoomVoice(agentId, voice) {
   } catch(e) { console.error('Failed to save voice:', e); }
 }
 
+let warRoomActive = false;
+let warRoomTimerInterval = null;
+let warRoomSeconds = 0;
+let warRoomTtsEnabled = true;
+let warRoomRecognition = null;
+let warRoomIsListening = false;
+let warRoomVisualizerAnim = null;
+let warRoomIsSpeaking = false;
+
+function formatWarRoomTime(sec) {
+  const m = Math.floor(sec / 60).toString().padStart(2, '0');
+  const s = (sec % 60).toString().padStart(2, '0');
+  return m + ':' + s;
+}
+
+function renderWarRoomAgents() {
+  const grid = document.getElementById('warroom-agents-grid');
+  if (!grid) return;
+  const agents = (typeof missionAgentsList !== 'undefined' && missionAgentsList.length) ? missionAgentsList : [
+    { id: 'antigravity', name: 'Antigravity', emoji: '🛰️' },
+    { id: 'opencode', name: 'OpenCode', emoji: '🔓' },
+    { id: 'codex', name: 'Codex', emoji: '🧠' },
+    { id: 'claude', name: 'Claude Code', emoji: '🎭' },
+    { id: 'openclaw', name: 'OpenClaw', emoji: '🦞' },
+    { id: 'hermes', name: 'Hermes', emoji: '🪽' },
+    { id: 'pi', name: 'Pi Agent', emoji: '🥧' },
+    { id: 'grok', name: 'Grok', emoji: '🛸' }
+  ];
+
+  grid.innerHTML = agents.map(a => {
+    const v = (typeof warRoomVoices !== 'undefined' && warRoomVoices[a.id]) ? warRoomVoices[a.id].split(' ')[0] : 'Charon';
+    return '<div id="warroom-node-' + a.id + '" class="warroom-node">' +
+      '<div class="warroom-avatar-ring">' + (a.emoji || '🤖') + '</div>' +
+      '<div class="warroom-name" title="' + escapeHtml(a.name) + '">' + escapeHtml(a.name) + '</div>' +
+      '<div class="warroom-voice-tag">' + escapeHtml(v) + '</div>' +
+    '</div>';
+  }).join('');
+}
+
+function setSpeakingAgent(agentId) {
+  document.querySelectorAll('.warroom-node').forEach(el => el.classList.remove('speaking'));
+  if (agentId) {
+    const el = document.getElementById('warroom-node-' + agentId);
+    if (el) el.classList.add('speaking');
+  }
+}
+
+function addTranscriptLine(speaker, voice, text, type) {
+  const box = document.getElementById('warroom-transcript');
+  if (!box) return;
+  const line = document.createElement('div');
+  line.className = 'transcript-line';
+  const timeStr = formatWarRoomTime(warRoomSeconds);
+  const speakerColor = type === 'user' ? '#60a5fa' : (type === 'system' ? '#fbbf24' : '#34d399');
+  const voiceTag = voice ? ' <span style="font-size:10px;color:#64748b;font-weight:normal">(' + escapeHtml(voice) + ')</span>' : '';
+  line.innerHTML = '<span class="transcript-time">[' + timeStr + ']</span>' +
+    '<span class="transcript-speaker" style="color:' + speakerColor + '">' + escapeHtml(speaker) + voiceTag + ':</span>' +
+    '<span class="transcript-msg">' + escapeHtml(text) + '</span>';
+  box.appendChild(line);
+  box.scrollTop = box.scrollHeight;
+}
+
+function initWarRoomVisualizer() {
+  const canvas = document.getElementById('warroom-visualizer');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  canvas.width = canvas.parentElement.clientWidth || 700;
+  canvas.height = 40;
+
+  const numBars = 48;
+  const barWidth = canvas.width / numBars;
+  let phase = 0;
+
+  function draw() {
+    if (!warRoomActive) return;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    phase += 0.08;
+
+    for (let i = 0; i < numBars; i++) {
+      let h;
+      if (warRoomIsSpeaking || warRoomIsListening) {
+        h = Math.sin(phase + i * 0.3) * 14 + Math.cos(phase * 1.5 + i * 0.2) * 10 + 16;
+        h = Math.max(4, Math.min(36, h));
+      } else {
+        h = Math.sin(phase * 0.5 + i * 0.2) * 3 + 4;
+      }
+      const x = i * barWidth;
+      const y = (canvas.height - h) / 2;
+      const grad = ctx.createLinearGradient(0, y, 0, y + h);
+      if (warRoomIsListening) {
+        grad.addColorStop(0, '#f87171');
+        grad.addColorStop(1, '#ef4444');
+      } else if (warRoomIsSpeaking) {
+        grad.addColorStop(0, '#34d399');
+        grad.addColorStop(1, '#059669');
+      } else {
+        grad.addColorStop(0, '#3b82f6');
+        grad.addColorStop(1, '#1e3a8a');
+      }
+      ctx.fillStyle = grad;
+      ctx.fillRect(x + 1, y, barWidth - 2, h);
+    }
+    warRoomVisualizerAnim = requestAnimationFrame(draw);
+  }
+  if (warRoomVisualizerAnim) cancelAnimationFrame(warRoomVisualizerAnim);
+  draw();
+}
+
+function speakText(text, voiceName, callback) {
+  if (!warRoomTtsEnabled || !('speechSynthesis' in window)) {
+    warRoomIsSpeaking = true;
+    setTimeout(() => {
+      warRoomIsSpeaking = false;
+      if (callback) callback();
+    }, 1800);
+    return;
+  }
+  window.speechSynthesis.cancel();
+  const utterance = new SpeechSynthesisUtterance(text);
+  utterance.rate = 1.05;
+
+  if (voiceName && voiceName.includes('Breezy')) { utterance.pitch = 1.25; utterance.rate = 1.1; }
+  else if (voiceName && voiceName.includes('Deep')) { utterance.pitch = 0.75; utterance.rate = 0.95; }
+  else if (voiceName && voiceName.includes('Authoritative')) { utterance.pitch = 0.9; utterance.rate = 1.0; }
+  else if (voiceName && voiceName.includes('Youthful')) { utterance.pitch = 1.15; utterance.rate = 1.1; }
+  else { utterance.pitch = 1.0; utterance.rate = 1.05; }
+
+  warRoomIsSpeaking = true;
+  utterance.onend = () => {
+    warRoomIsSpeaking = false;
+    if (callback) callback();
+  };
+  utterance.onerror = () => {
+    warRoomIsSpeaking = false;
+    if (callback) callback();
+  };
+  window.speechSynthesis.speak(utterance);
+}
+
+function toggleWarRoomTts() {
+  warRoomTtsEnabled = !warRoomTtsEnabled;
+  const btn = document.getElementById('warroom-tts-toggle');
+  if (btn) {
+    btn.textContent = warRoomTtsEnabled ? '🔊 Voice On' : '🔇 Voice Muted';
+    btn.style.color = warRoomTtsEnabled ? '#94a3b8' : '#f87171';
+  }
+  if (!warRoomTtsEnabled && 'speechSynthesis' in window) {
+    window.speechSynthesis.cancel();
+    warRoomIsSpeaking = false;
+  }
+}
+
 async function startWarRoomStandup() {
   try {
-    const res = await fetch(BASE + '/api/warroom/standup?token=' + TOKEN, { method: 'POST' });
+    fetch(BASE + '/api/warroom/standup?token=' + TOKEN, { method: 'POST' }).catch(() => {});
+  } catch(e) {}
+
+  openWarRoomModal();
+}
+
+function openWarRoomModal() {
+  warRoomActive = true;
+  warRoomSeconds = 0;
+  const overlay = document.getElementById('warroom-overlay');
+  const modal = document.getElementById('warroom-modal');
+  overlay.style.opacity = '1';
+  overlay.style.pointerEvents = 'auto';
+  modal.style.opacity = '1';
+  modal.style.pointerEvents = 'auto';
+  modal.style.transform = 'translate(-50%,-50%) scale(1)';
+
+  renderWarRoomAgents();
+  initWarRoomVisualizer();
+
+  const transcript = document.getElementById('warroom-transcript');
+  transcript.innerHTML = '';
+  document.getElementById('warroom-timer').textContent = '00:00';
+  document.getElementById('warroom-speaker-status').textContent = 'Swarm convening roll call...';
+
+  if (warRoomTimerInterval) clearInterval(warRoomTimerInterval);
+  warRoomTimerInterval = setInterval(() => {
+    warRoomSeconds++;
+    const t = document.getElementById('warroom-timer');
+    if (t) t.textContent = formatWarRoomTime(warRoomSeconds);
+  }, 1000);
+
+  runSwarmRollCall();
+}
+
+function endWarRoomStandup() {
+  warRoomActive = false;
+  warRoomIsSpeaking = false;
+  warRoomIsListening = false;
+  if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+  if (warRoomRecognition) {
+    try { warRoomRecognition.stop(); } catch(e) {}
+  }
+  if (warRoomTimerInterval) clearInterval(warRoomTimerInterval);
+  if (warRoomVisualizerAnim) cancelAnimationFrame(warRoomVisualizerAnim);
+
+  const overlay = document.getElementById('warroom-overlay');
+  const modal = document.getElementById('warroom-modal');
+  overlay.style.opacity = '0';
+  overlay.style.pointerEvents = 'none';
+  modal.style.opacity = '0';
+  modal.style.pointerEvents = 'none';
+  modal.style.transform = 'translate(-50%,-50%) scale(0.95)';
+  setSpeakingAgent(null);
+  loadHiveMind();
+}
+
+function runSwarmRollCall() {
+  const steps = [
+    {
+      agentId: 'antigravity',
+      name: 'Antigravity',
+      voice: (typeof warRoomVoices !== 'undefined' && warRoomVoices['antigravity']) || 'Charon',
+      text: 'War Room Standup convened. All 8 agents online. Swarm status nominal.'
+    },
+    {
+      agentId: 'codex',
+      name: 'Codex',
+      voice: (typeof warRoomVoices !== 'undefined' && warRoomVoices['codex']) || 'Leda',
+      text: 'Codex reporting. Active model GPT-5.6 Luna. Ready for coding and test suites.'
+    },
+    {
+      agentId: 'claude',
+      name: 'Claude Code',
+      voice: (typeof warRoomVoices !== 'undefined' && warRoomVoices['claude']) || 'Alnilam',
+      text: 'Claude Code online. Architecture and plan execution standing by.'
+    },
+    {
+      agentId: 'grok',
+      name: 'Grok',
+      voice: (typeof warRoomVoices !== 'undefined' && warRoomVoices['grok']) || 'Fenrir',
+      text: 'Grok standby. Real-time telemetry monitoring active. What are your orders?'
+    }
+  ];
+
+  let idx = 0;
+  function nextStep() {
+    if (!warRoomActive || idx >= steps.length) {
+      setSpeakingAgent(null);
+      const st = document.getElementById('warroom-speaker-status');
+      if (st) st.textContent = 'Standup active &middot; Speak or type below';
+      return;
+    }
+    const item = steps[idx++];
+    setSpeakingAgent(item.agentId);
+    const st = document.getElementById('warroom-speaker-status');
+    if (st) st.textContent = item.name + ' speaking...';
+    addTranscriptLine(item.name, item.voice, item.text, 'agent');
+    speakText(item.text, item.voice, () => {
+      setTimeout(nextStep, 400);
+    });
+  }
+
+  setTimeout(nextStep, 600);
+}
+
+async function sendWarRoomSpeech(customText) {
+  const input = document.getElementById('warroom-input');
+  const text = (customText || (input ? input.value : '')).trim();
+  if (!text) return;
+  if (input) input.value = '';
+
+  addTranscriptLine('You', null, text, 'user');
+  const st = document.getElementById('warroom-speaker-status');
+  if (st) st.textContent = 'Swarm analyzing...';
+
+  try {
+    const res = await fetch(BASE + '/api/warroom/message?token=' + TOKEN, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: text })
+    });
     const data = await res.json();
-    alert('🎙️ Voice Standup Convened!\\nAgents connected with Gemini Live voice synthesizers. You can speak now or view logs in Hive Mind.');
-    loadHiveMind();
-  } catch(e) { alert('Standup failed: ' + e.message); }
+    if (data.ok) {
+      const agentId = data.agentId || 'codex';
+      const agentName = data.agentName || 'Codex';
+      const reply = data.reply || 'Swarm acknowledged.';
+      const voice = (typeof warRoomVoices !== 'undefined' && warRoomVoices[agentId]) || 'Charon';
+
+      setSpeakingAgent(agentId);
+      if (st) st.textContent = agentName + ' responding...';
+      addTranscriptLine(agentName, voice, reply, 'agent');
+      speakText(reply, voice, () => {
+        setSpeakingAgent(null);
+        if (st) st.textContent = 'Standup active &middot; Speak or type below';
+      });
+      loadHiveMind();
+    }
+  } catch(e) {
+    addTranscriptLine('System', null, 'Communication error: ' + e.message, 'system');
+  }
+}
+
+function toggleWarRoomMic() {
+  const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SpeechRec) {
+    alert('Speech recognition is not supported in this browser. You can type directly in the message box below!');
+    const inp = document.getElementById('warroom-input');
+    if (inp) inp.focus();
+    return;
+  }
+
+  if (warRoomIsListening) {
+    if (warRoomRecognition) warRoomRecognition.stop();
+    return;
+  }
+
+  try {
+    warRoomRecognition = new SpeechRec();
+    warRoomRecognition.continuous = false;
+    warRoomRecognition.interimResults = false;
+    warRoomRecognition.lang = 'en-US';
+
+    warRoomRecognition.onstart = () => {
+      warRoomIsListening = true;
+      const btn = document.getElementById('warroom-mic-btn');
+      const txt = document.getElementById('warroom-mic-text');
+      const st = document.getElementById('warroom-speaker-status');
+      if (btn) { btn.style.borderColor = '#ef4444'; btn.style.background = '#7f1d1d'; }
+      if (txt) txt.textContent = 'Listening...';
+      if (st) st.textContent = 'Listening to your microphone...';
+    };
+
+    warRoomRecognition.onresult = (event) => {
+      const spoken = event.results[0][0].transcript;
+      if (spoken) sendWarRoomSpeech(spoken);
+    };
+
+    warRoomRecognition.onerror = (e) => {
+      console.warn('Speech recognition error:', e);
+    };
+
+    warRoomRecognition.onend = () => {
+      warRoomIsListening = false;
+      const btn = document.getElementById('warroom-mic-btn');
+      const txt = document.getElementById('warroom-mic-text');
+      const st = document.getElementById('warroom-speaker-status');
+      if (btn) { btn.style.borderColor = '#3b82f6'; btn.style.background = '#1e293b'; }
+      if (txt) txt.textContent = 'Speak';
+      if (st && warRoomActive && !warRoomIsSpeaking) st.textContent = 'Standup active &middot; Speak or type below';
+    };
+
+    warRoomRecognition.start();
+  } catch(e) {
+    alert('Microphone access could not be started: ' + e.message);
+  }
 }
 
 async function dispatchMeeting(provider) {
@@ -2695,6 +3051,53 @@ async function abortProcessing() {
   </div>
 </div>
 
+
+<!-- War Room Live Voice Standup HUD Modal -->
+<div id="warroom-overlay" style="position:fixed;inset:0;background:rgba(0,0,0,0.85);backdrop-filter:blur(8px);z-index:100;opacity:0;pointer-events:none;transition:opacity 0.25s"></div>
+<div id="warroom-modal" style="position:fixed;top:50%;left:50%;transform:translate(-50%,-50%) scale(0.95);z-index:101;background:#0b0c14;border:1px solid #3b82f6;border-radius:16px;width:95%;max-width:760px;max-height:92vh;display:flex;flex-direction:column;opacity:0;pointer-events:none;transition:transform 0.25s ease,opacity 0.25s ease;box-shadow:0 0 50px rgba(59,130,246,0.35);overflow:hidden">
+  <!-- Top bar -->
+  <div class="flex items-center justify-between px-5 py-3 border-b border-gray-800 bg-[#10121e]">
+    <div class="flex items-center gap-3">
+      <span class="flex items-center gap-2">
+        <span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:#ef4444;box-shadow:0 0 10px #ef4444;animation:pulse 1s infinite"></span>
+        <span class="text-xs font-bold text-white tracking-wider">WAR ROOM &middot; LIVE VOICE STANDUP</span>
+      </span>
+      <span id="warroom-timer" class="font-mono text-xs text-blue-400 bg-blue-950/60 px-2 py-0.5 rounded border border-blue-800">00:00</span>
+    </div>
+    <div class="flex items-center gap-2">
+      <button id="warroom-tts-toggle" onclick="toggleWarRoomTts()" style="background:#1e293b;color:#94a3b8;border:1px solid #334155;border-radius:6px;padding:3px 8px;font-size:12px;cursor:pointer" title="Toggle AI Speech Voice">🔊 Voice On</button>
+      <button onclick="endWarRoomStandup()" style="background:#dc2626;color:#fff;border:none;border-radius:6px;padding:4px 12px;font-size:12px;font-weight:600;cursor:pointer">End Meeting &times;</button>
+    </div>
+  </div>
+
+  <!-- Agent Swarm Avatars -->
+  <div class="p-4 bg-[#0e101a] border-b border-gray-800">
+    <div class="flex items-center justify-between mb-2">
+      <span class="text-[11px] font-semibold text-gray-400 uppercase tracking-wider">Swarm Participants (8 Agents Online)</span>
+      <span id="warroom-speaker-status" class="text-xs text-emerald-400 font-medium">Convening standup...</span>
+    </div>
+    <div id="warroom-agents-grid" class="grid grid-cols-4 sm:grid-cols-8 gap-2"></div>
+  </div>
+
+  <!-- Audio Visualizer Canvas -->
+  <div class="px-4 py-2 bg-[#08090f] border-b border-gray-800">
+    <canvas id="warroom-visualizer" height="40" style="width:100%;height:40px;display:block"></canvas>
+  </div>
+
+  <!-- Live Transcript Log -->
+  <div class="flex-1 p-4 overflow-y-auto" id="warroom-transcript" style="max-height:220px;min-height:140px;background:#08090f;font-family:monospace;font-size:12px;display:flex;flex-direction:column;gap:6px">
+    <div class="text-gray-500 italic">Initializing swarm standup...</div>
+  </div>
+
+  <!-- Speech Controls & Prompt Input -->
+  <div class="p-3 bg-[#10121e] border-t border-gray-800 flex items-center gap-2">
+    <button id="warroom-mic-btn" onclick="toggleWarRoomMic()" style="background:#1e293b;color:#fff;border:1px solid #3b82f6;border-radius:8px;padding:8px 14px;font-size:12px;font-weight:600;display:flex;align-items:center;gap:6px;cursor:pointer;white-space:nowrap">
+      <span id="warroom-mic-icon">🎤</span> <span id="warroom-mic-text">Speak</span>
+    </button>
+    <input type="text" id="warroom-input" placeholder="Type a message or question to the agents (or click Speak)..." style="flex:1;background:#08090f;border:1px solid #334155;border-radius:8px;padding:8px 12px;color:#fff;font-size:12px;outline:none" onkeydown="if(event.key==='Enter'){sendWarRoomSpeech()}">
+    <button onclick="sendWarRoomSpeech()" style="background:#2563eb;color:#fff;border:none;border-radius:8px;padding:8px 16px;font-size:12px;font-weight:600;cursor:pointer">Send</button>
+  </div>
+</div>
 
 <!-- Provider Settings Modal -->
 <div id="provider-overlay" style="position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:90;opacity:0;pointer-events:none;transition:opacity 0.2s"></div>

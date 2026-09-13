@@ -673,6 +673,33 @@ class MissionControlServer {
                 return this._sendJson(res, 200, { ok: true, sessionId, message: 'War room voice standup convened.' });
             }
 
+            // 8c. War Room Standup Interactive Speech & Message
+            if (pathname === '/api/warroom/message' && req.method === 'POST') {
+                const body = await this._readBody(req);
+                const userMsg = (body.message || '').trim();
+                const activeAgentId = this.activeAgentKey || 'codex';
+                const activeAgent = this.agents[activeAgentId];
+                const agentName = activeAgent ? activeAgent.name : activeAgentId;
+
+                this.db.recordHiveMind('user', 'war_room', 'user_speech', userMsg);
+
+                let reply = `Agent ${agentName} reporting: All systems are operational. Swarm is standing by for your directives.`;
+                const lower = userMsg.toLowerCase();
+                if (lower.includes('status') || lower.includes('report')) {
+                    const taskCount = this.db.getMissionTasks().length;
+                    reply = `${agentName} status report: Swarm has ${Object.keys(this.agents).length} live agents connected. ${taskCount} tasks logged in mission control. Concurrency pool is healthy.`;
+                } else if (lower.includes('task') || lower.includes('todo') || lower.includes('in progress')) {
+                    const queued = this.db.getMissionTasks('queued').length;
+                    const inProg = this.db.getMissionTasks('in_progress').length;
+                    reply = `Task update: ${inProg} in progress, ${queued} queued. All agents ready for new tasks.`;
+                } else if (lower.includes('help') || lower.includes('who')) {
+                    reply = `War Room active agents: Antigravity, OpenCode, Codex, Claude Code, OpenClaw, Hermes, Pi Agent, and Grok. Ready to assist.`;
+                }
+
+                this.db.recordHiveMind(activeAgentId, 'war_room', 'agent_speech', reply);
+                return this._sendJson(res, 200, { ok: true, agentId: activeAgentId, agentName, reply });
+            }
+
             // 9. Live Meetings Dispatch (Pika, Recall.ai, Daily.co)
             if (pathname === '/api/meetings') {
                 if (req.method === 'GET') {
