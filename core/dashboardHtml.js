@@ -160,10 +160,13 @@ async function saveProviderSettings() {
   .mem-expand.open .mem-full { display: block; }
   .mem-expand.open .mem-preview { display: none; }
   /* War Room HUD */
-  .warroom-node { text-align: center; padding: 8px 4px; border-radius: 10px; transition: all 0.25s; background: #10121d; border: 1px solid #1e2438; }
+  .warroom-node { text-align: center; padding: 8px 4px; border-radius: 10px; transition: all 0.25s; background: #10121d; border: 1px solid #1e2438; cursor: pointer; }
+  .warroom-node:hover { border-color: #3b82f6; background: #151828; }
+  .warroom-node.selected { border-color: #38bdf8; background: #0369a122; }
+  .warroom-node.selected .warroom-avatar-ring { border-color: #38bdf8; box-shadow: 0 0 14px rgba(56,189,248,0.7); }
   .warroom-avatar-ring { width: 44px; height: 44px; border-radius: 50%; border: 2px solid #334155; display: flex; align-items: center; justify-content: center; margin: 0 auto 6px auto; font-size: 20px; transition: all 0.25s; background: #0b0c14; }
-  .warroom-node.speaking { border-color: #10b981; background: #064e3b33; transform: translateY(-2px); }
-  .warroom-node.speaking .warroom-avatar-ring { border-color: #10b981; box-shadow: 0 0 18px rgba(16,185,129,0.85); transform: scale(1.12); }
+  .warroom-node.speaking { border-color: #10b981 !important; background: #064e3b33 !important; transform: translateY(-2px); }
+  .warroom-node.speaking .warroom-avatar-ring { border-color: #10b981 !important; box-shadow: 0 0 18px rgba(16,185,129,0.85) !important; transform: scale(1.12); }
   .warroom-name { font-size: 11px; font-weight: 700; color: #cbd5e1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .warroom-node.speaking .warroom-name { color: #34d399; }
   .warroom-voice-tag { font-size: 10px; color: #64748b; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -2262,6 +2265,18 @@ let warRoomRecognition = null;
 let warRoomIsListening = false;
 let warRoomVisualizerAnim = null;
 let warRoomIsSpeaking = false;
+let warRoomTargetAgent = 'codex';
+
+function selectWarRoomAgent(agentId) {
+  warRoomTargetAgent = agentId;
+  document.querySelectorAll('.warroom-node').forEach(el => el.classList.remove('selected'));
+  const el = document.getElementById('warroom-node-' + agentId);
+  if (el) el.classList.add('selected');
+  const agent = (typeof missionAgentsList !== 'undefined') ? missionAgentsList.find(a => a.id === agentId) : null;
+  const name = agent ? agent.name : agentId;
+  const st = document.getElementById('warroom-speaker-status');
+  if (st && !warRoomIsSpeaking) st.textContent = 'Targeting ' + name + ' (click another agent to switch)';
+}
 
 function formatWarRoomTime(sec) {
   const m = Math.floor(sec / 60).toString().padStart(2, '0');
@@ -2285,7 +2300,8 @@ function renderWarRoomAgents() {
 
   grid.innerHTML = agents.map(a => {
     const v = (typeof warRoomVoices !== 'undefined' && warRoomVoices[a.id]) ? warRoomVoices[a.id].split(' ')[0] : 'Charon';
-    return '<div id="warroom-node-' + a.id + '" class="warroom-node">' +
+    const isSel = a.id === warRoomTargetAgent ? ' selected' : '';
+    return '<div id="warroom-node-' + a.id + '" class="warroom-node' + isSel + '" data-agent="' + a.id + '" onclick="selectWarRoomAgent(this.dataset.agent)" title="Click to direct speech to ' + escapeHtml(a.name) + '">' +
       '<div class="warroom-avatar-ring">' + (a.emoji || '🤖') + '</div>' +
       '<div class="warroom-name" title="' + escapeHtml(a.name) + '">' + escapeHtml(a.name) + '</div>' +
       '<div class="warroom-voice-tag">' + escapeHtml(v) + '</div>' +
@@ -2528,7 +2544,7 @@ async function sendWarRoomSpeech(customText) {
     const res = await fetch(BASE + '/api/warroom/message?token=' + TOKEN, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message: text })
+      body: JSON.stringify({ message: text, agentId: warRoomTargetAgent })
     });
     const data = await res.json();
     if (data.ok) {
