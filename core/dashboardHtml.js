@@ -3044,8 +3044,20 @@ function connectChatSSE() {
     const ev = JSON.parse(e.data);
     const msgs = document.getElementById('chat-messages');
     const lastMsg = msgs ? msgs.lastElementChild : null;
-    if (lastMsg && lastMsg.classList.contains('chat-bubble-assistant') && lastMsg.getAttribute('data-content') === ev.content) {
-      return; // Deduplicate assistant reply
+    if (lastMsg && lastMsg.classList.contains('chat-bubble-assistant')) {
+      if (lastMsg.getAttribute('data-content') === ev.content) return;
+      lastMsg.setAttribute('data-content', ev.content);
+      lastMsg.innerHTML = renderMarkdown(ev.content);
+      const src = ev.source || lastMsg.getAttribute('data-source');
+      if (src && src !== 'telegram' && src !== 'dashboard') {
+        const srcBadge = document.createElement('div');
+        srcBadge.className = 'chat-bubble-source';
+        srcBadge.textContent = src.charAt(0).toUpperCase() + src.slice(1);
+        lastMsg.appendChild(srcBadge);
+      }
+      scrollChatBottom();
+      hideTyping();
+      return;
     }
     appendChatBubble('assistant', ev.content, ev.source, true);
     hideTyping();
@@ -3093,6 +3105,7 @@ function appendChatBubble(role, content, source, scroll) {
   const bubble = document.createElement('div');
   bubble.className = 'chat-bubble ' + (role === 'user' ? 'chat-bubble-user' : 'chat-bubble-assistant');
   bubble.setAttribute('data-content', content);
+  bubble.setAttribute('data-source', source || '');
   bubble.innerHTML = role === 'assistant' ? renderMarkdown(content) : escapeHtml(content);
   if (source && source !== 'telegram' && source !== 'dashboard') {
     const srcBadge = document.createElement('div');

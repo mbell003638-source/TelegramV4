@@ -999,6 +999,23 @@ class MissionControlServer {
                 return this._sendJson(res, 200, { success: true, agent: agentKey });
             }
 
+            // 10b. Chat Abort (Stop currently running response)
+            if (pathname === '/api/chat/abort' && req.method === 'POST') {
+                const body = await this._readBody(req).catch(() => ({}));
+                const targetChatId = body.chatId || query.chatId || 'dashboard_chat';
+                if (this.actionExecutor && typeof this.actionExecutor.cancelChat === 'function') {
+                    this.actionExecutor.cancelChat(targetChatId);
+                }
+                for (const a of Object.values(this.agents)) {
+                    if (a && a.process && typeof a.stop === 'function') {
+                        a.stop().catch(() => {});
+                    }
+                }
+                this.broadcast('processing', { processing: false });
+                this.broadcast('assistant_message', { content: '🛑 Stopped by user.', source: 'system' });
+                return this._sendJson(res, 200, { success: true, aborted: true });
+            }
+
             // 9. Satellite Workers (Distributed Windows/Remote nodes)
             if (pathname === '/api/satellite/poll') {
                 const body = (req.method === 'POST') ? await this._readBody(req) : {};

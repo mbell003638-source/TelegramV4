@@ -1700,6 +1700,26 @@ class ActionExecutor {
         }
     }
 
+    cancelChat(chatId) {
+        const state = this.active.get(chatId);
+        if (state) {
+            const agent = this._getAgent(state.agentKey, chatId);
+            if (agent && typeof agent.cancelTurn === 'function') {
+                agent.cancelTurn().catch(() => {});
+            } else if (agent && typeof agent.stop === 'function') {
+                agent.stop().catch(() => {});
+            }
+            this._cleanup(state);
+            return true;
+        }
+        for (const agent of Object.values(this.agents)) {
+            if (agent && agent.process && typeof agent.stop === 'function') {
+                agent.stop().catch(() => {});
+            }
+        }
+        return false;
+    }
+
     async stop() {
         for (const state of this.active.values()) {
             if (state.pendingTimer) clearTimeout(state.pendingTimer);

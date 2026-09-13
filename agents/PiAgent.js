@@ -170,12 +170,27 @@ class PiAgent extends BaseAgent {
             PATH: (os.homedir() + '/.npm-global/bin:' + os.homedir() + '/.local/bin:' + (process.env.PATH || ''))
         };
 
+        let execBinary = this.piPath;
+        let execArgs = args;
+        let useShell = false;
+
+        if (isWin && this.piPath && this.piPath.toLowerCase().endsWith('.cmd')) {
+            const jsCandidate = path.join(path.dirname(this.piPath), 'node_modules', '@earendil-works', 'pi-coding-agent', 'dist', 'bundle', 'cli.js');
+            if (fs.existsSync(jsCandidate)) {
+                execBinary = process.execPath;
+                execArgs = [jsCandidate, ...args];
+                useShell = false;
+            } else {
+                useShell = true;
+            }
+        }
+
         return new Promise((resolve) => {
-            this.process = spawn(this.piPath, args, {
+            this.process = spawn(execBinary, execArgs, {
                 cwd: workspaceRoot,
                 env,
                 stdio: ['ignore', 'pipe', 'pipe'],
-                shell: isWin
+                shell: useShell
             });
 
             let buffer = '';
