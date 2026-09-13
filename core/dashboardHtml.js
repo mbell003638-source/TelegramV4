@@ -5,7 +5,93 @@ function getDashboardHtml(token, chatId) {
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
 <title>ClaudeClaw Mission Control</title>
-<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdn.tailwindcss.com">
+async function openProviderSettingsModal() {
+  var overlay = document.getElementById('provider-overlay');
+  var modal = document.getElementById('provider-modal');
+  overlay.style.opacity = '1';
+  overlay.style.pointerEvents = 'auto';
+  modal.style.opacity = '1';
+  modal.style.pointerEvents = 'auto';
+  modal.style.transform = 'translate(-50%,-50%) scale(1)';
+  document.getElementById('provider-save-status').innerHTML = '';
+  
+  try {
+    const data = await api('/api/settings/providers');
+    const p = data.providers || {};
+    
+    // Set badges
+    const setBadge = (id, obj) => {
+      const el = document.getElementById(id + '-badge');
+      if (!el) return;
+      if (obj && obj.configured) {
+        el.textContent = 'Configured (' + obj.masked + ')';
+        el.className = 'pill pill-active';
+      } else {
+        el.textContent = 'Not configured';
+        el.className = 'pill pill-paused';
+      }
+    };
+    setBadge('openrouter', p.openrouter);
+    setBadge('anthropic', p.anthropic);
+    setBadge('openai', p.openai);
+    setBadge('deepseek', p.deepseek);
+    setBadge('groq', p.groq);
+    if (p.ollama && p.ollama.baseUrl) document.getElementById('url-ollama').value = p.ollama.baseUrl;
+    if (p.openai && p.openai.baseUrl) document.getElementById('url-openai').value = p.openai.baseUrl;
+  } catch(e) { console.error('Failed to load provider settings:', e); }
+}
+
+function closeProviderSettingsModal() {
+  var overlay = document.getElementById('provider-overlay');
+  var modal = document.getElementById('provider-modal');
+  overlay.style.opacity = '0';
+  overlay.style.pointerEvents = 'none';
+  modal.style.opacity = '0';
+  modal.style.pointerEvents = 'none';
+  modal.style.transform = 'translate(-50%,-50%) scale(0.95)';
+}
+document.getElementById('provider-overlay')?.addEventListener('click', closeProviderSettingsModal);
+
+async function saveProviderSettings() {
+  const status = document.getElementById('provider-save-status');
+  status.innerHTML = '<span style="color:#fbbf24">Saving...</span>';
+  
+  const payload = {
+    openrouterApiKey: document.getElementById('key-openrouter').value.trim() || undefined,
+    anthropicApiKey: document.getElementById('key-anthropic').value.trim() || undefined,
+    openaiApiKey: document.getElementById('key-openai').value.trim() || undefined,
+    openaiBaseUrl: document.getElementById('url-openai').value.trim() || undefined,
+    deepseekApiKey: document.getElementById('key-deepseek').value.trim() || undefined,
+    groqApiKey: document.getElementById('key-groq').value.trim() || undefined,
+    ollamaBaseUrl: document.getElementById('url-ollama').value.trim() || undefined,
+  };
+  
+  try {
+    const res = await fetch(BASE + '/api/settings/providers?token=' + TOKEN, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    const data = await res.json();
+    if (data.ok) {
+      status.innerHTML = '<span style="color:#6ee7b7">✓ Saved and applied!</span>';
+      // Clear password input fields for security
+      document.getElementById('key-openrouter').value = '';
+      document.getElementById('key-anthropic').value = '';
+      document.getElementById('key-openai').value = '';
+      document.getElementById('key-deepseek').value = '';
+      document.getElementById('key-groq').value = '';
+      setTimeout(() => { closeProviderSettingsModal(); loadAgents(); }, 1000);
+    } else {
+      status.innerHTML = '<span style="color:#f87171">' + (data.error || 'Save failed') + '</span>';
+    }
+  } catch(e) {
+    status.innerHTML = '<span style="color:#f87171">Error: ' + e.message + '</span>';
+  }
+}
+
+</script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
 <style>
   body { background: #0f0f0f; color: #e0e0e0; -webkit-tap-highlight-color: transparent; }
@@ -160,6 +246,10 @@ function getDashboardHtml(token, chatId) {
     <span id="device-badge" class="device-badge"></span>
   </div>
   <div class="flex items-center gap-3">
+    <button onclick="openProviderSettingsModal()" style="background:#1e1e2e;color:#a78bfa;border:1px solid #3b3356;border-radius:8px;padding:4px 12px;font-size:12px;font-weight:600;display:flex;align-items:center;gap:6px;cursor:pointer">
+      <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+      Providers & API Keys
+    </button>
     <span id="last-updated" class="text-xs text-gray-500"></span>
     <button id="refresh-btn" onclick="refreshAll()" class="text-gray-400 hover:text-white transition">
       <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -171,7 +261,7 @@ function getDashboardHtml(token, chatId) {
 <div id="bot-info" class="flex items-center gap-3 mb-4 text-xs text-gray-500" style="display:none"></div>
 
 <!-- Summary Stats Bar -->
-<div id="summary-bar" class="summary-bar" style="display:none">
+<div id="summary-bar" class="summary-bar">
   <div class="summary-stat clickable-card" onclick="document.getElementById('hive-section').scrollIntoView({behavior:'smooth'})" style="cursor:pointer">
     <span class="summary-stat-val" id="sum-messages">-</span>
     <span class="summary-stat-label">Messages</span>
@@ -191,7 +281,7 @@ function getDashboardHtml(token, chatId) {
 </div>
 
 <!-- Agent Status Cards -->
-<div id="agents-section" class="mb-5" style="display:none">
+<div id="agents-section" class="mb-5">
   <div class="flex items-center justify-between mb-2">
     <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wider">Agents</h2>
     <div class="flex items-center gap-2">
@@ -211,7 +301,7 @@ function getDashboardHtml(token, chatId) {
 </div>
 
 <!-- Hive Mind Feed -->
-<div id="hive-section" class="mb-5" style="display:none">
+<div id="hive-section" class="mb-5">
   <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-2">Hive Mind<button class="privacy-toggle" onclick="toggleSectionBlur('hive')" title="Toggle blur">&#128065;</button></h2>
   <div id="hive-container" class="card hive-scroll">
     <div class="text-gray-500 text-sm">Loading...</div>
@@ -219,7 +309,7 @@ function getDashboardHtml(token, chatId) {
 </div>
 
 <!-- Tasks Inbox -->
-<div id="tasks-inbox-section" class="mb-5" style="display:none">
+<div id="tasks-inbox-section" class="mb-5">
   <div class="flex items-center justify-between mb-2">
     <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wider">Tasks</h2>
     <div class="flex gap-2">
@@ -231,7 +321,7 @@ function getDashboardHtml(token, chatId) {
 </div>
 
 <!-- Mission Control -->
-<div id="mission-section" class="mb-5" style="display:none">
+<div id="mission-section" class="mb-5">
   <div class="flex items-center justify-between mb-2">
     <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wider">Mission Control</h2>
     <button onclick="openTaskHistory()" style="background:none;border:none;color:#6b7280;font-size:12px;cursor:pointer">History &rarr;</button>
@@ -1194,12 +1284,16 @@ async function agentModalAction(agentId, action) {
       var res = await fetch(BASE + '/api/agents/' + agentId + '/activate?token=' + TOKEN, { method: 'POST' });
       var data = await res.json();
       if (data.ok) {
-        status.innerHTML = '<span style="color:#6ee7b7">Activated ' + (agent ? agent.name : agentId) + '</span>';
-        setTimeout(function() { closeAgentModal(); loadAgents(); }, 800);
+        var agentObj = (typeof missionAgentsList !== 'undefined' ? missionAgentsList.find(function(x) { return x.id === agentId; }) : null);
+        var agentName = agentObj ? agentObj.name : agentId;
+        status.innerHTML = '<span style="color:#6ee7b7">Activated ' + escapeHtml(agentName) + '</span>';
+        setTimeout(function() { closeAgentModal(); loadAgents(); }, 600);
       } else {
         status.innerHTML = '<span style="color:#f87171">' + escapeHtml(data.error || 'Activation failed') + '</span>';
       }
-    } catch(e) { status.innerHTML = '<span style="color:#f87171">Network error</span>'; }
+    } catch(e) {
+      status.innerHTML = '<span style="color:#f87171">Error: ' + escapeHtml(e.message || 'Request failed') + '</span>';
+    }
   }
 }
 
@@ -1618,10 +1712,7 @@ async function loadMissionControl() {
     }
 
     // Mission Control agent columns
-    if (assigned.length === 0 && missionAgentsList.length <= 1) {
-      document.getElementById('mission-section').style.display = 'none';
-    } else {
-      document.getElementById('mission-section').style.display = '';
+    document.getElementById('mission-section').style.display = '';
       const board = document.getElementById('mission-board');
       const agentIds = missionAgentsList.map(a => a.id);
       const cols = {};
@@ -2327,6 +2418,82 @@ async function abortProcessing() {
   <div class="chat-input-area">
     <textarea class="chat-textarea" id="chat-input" rows="1" placeholder="Send a message..." oninput="autoResizeInput()" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendChatMessage()}"></textarea>
     <button class="chat-send-btn" id="chat-send-btn" onclick="sendChatMessage()">Send</button>
+  </div>
+</div>
+
+
+<!-- Provider Settings Modal -->
+<div id="provider-overlay" style="position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:90;opacity:0;pointer-events:none;transition:opacity 0.2s"></div>
+<div id="provider-modal" style="position:fixed;top:50%;left:50%;transform:translate(-50%,-50%) scale(0.95);z-index:95;background:#141414;border:1px solid #2a2a2a;border-radius:14px;width:92%;max-width:580px;max-height:85vh;overflow-y:auto;opacity:0;pointer-events:none;transition:transform 0.2s ease,opacity 0.2s ease;box-shadow:0 12px 36px rgba(0,0,0,0.6)">
+  <div class="flex items-center justify-between px-5 py-4 border-b border-gray-800">
+    <div class="flex items-center gap-2">
+      <span style="font-size:18px">⚙️</span>
+      <h3 class="text-base font-bold text-white">AI Model Providers & API Keys</h3>
+    </div>
+    <button onclick="closeProviderSettingsModal()" class="text-gray-400 hover:text-white" style="background:none;border:none;cursor:pointer;font-size:20px">&times;</button>
+  </div>
+  <div class="p-5 space-y-4 text-xs">
+    <p class="text-gray-400">Configure your third-party AI provider keys here (OpenRouter, OpenAI, Anthropic, DeepSeek, Groq, Ollama). They are saved securely to your <code>.env</code> file and applied to all agents in real time.</p>
+    
+    <!-- OpenRouter -->
+    <div style="background:#1a1a1a;border:1px solid #2a2a2a;border-radius:8px;padding:10px">
+      <div class="flex justify-between items-center mb-1">
+        <label class="font-bold text-gray-200">OpenRouter API Key <span class="text-gray-500 font-normal">(200+ models, DeepSeek R1, Claude, Llama 3)</span></label>
+        <span id="openrouter-badge" class="pill" style="font-size:9px">Not configured</span>
+      </div>
+      <input type="password" id="key-openrouter" placeholder="sk-or-v1-..." style="width:100%;background:#111;border:1px solid #333;border-radius:6px;padding:6px 10px;color:#fff;font-size:12px;outline:none;box-sizing:border-box">
+    </div>
+
+    <!-- Anthropic -->
+    <div style="background:#1a1a1a;border:1px solid #2a2a2a;border-radius:8px;padding:10px">
+      <div class="flex justify-between items-center mb-1">
+        <label class="font-bold text-gray-200">Anthropic Claude API Key</label>
+        <span id="anthropic-badge" class="pill" style="font-size:9px">Not configured</span>
+      </div>
+      <input type="password" id="key-anthropic" placeholder="sk-ant-..." style="width:100%;background:#111;border:1px solid #333;border-radius:6px;padding:6px 10px;color:#fff;font-size:12px;outline:none;box-sizing:border-box">
+    </div>
+
+    <!-- OpenAI / Codex -->
+    <div style="background:#1a1a1a;border:1px solid #2a2a2a;border-radius:8px;padding:10px">
+      <div class="flex justify-between items-center mb-1">
+        <label class="font-bold text-gray-200">OpenAI / Codex API Key</label>
+        <span id="openai-badge" class="pill" style="font-size:9px">Not configured</span>
+      </div>
+      <input type="password" id="key-openai" placeholder="sk-proj-..." style="width:100%;background:#111;border:1px solid #333;border-radius:6px;padding:6px 10px;color:#fff;font-size:12px;outline:none;box-sizing:border-box">
+      <input type="text" id="url-openai" placeholder="Custom OpenAI Base URL (optional, e.g. https://api.openai.com/v1)" style="width:100%;background:#111;border:1px solid #333;border-radius:6px;padding:6px 10px;color:#fff;font-size:11px;outline:none;margin-top:6px;box-sizing:border-box">
+    </div>
+
+    <!-- DeepSeek -->
+    <div style="background:#1a1a1a;border:1px solid #2a2a2a;border-radius:8px;padding:10px">
+      <div class="flex justify-between items-center mb-1">
+        <label class="font-bold text-gray-200">DeepSeek API Key</label>
+        <span id="deepseek-badge" class="pill" style="font-size:9px">Not configured</span>
+      </div>
+      <input type="password" id="key-deepseek" placeholder="sk-..." style="width:100%;background:#111;border:1px solid #333;border-radius:6px;padding:6px 10px;color:#fff;font-size:12px;outline:none;box-sizing:border-box">
+    </div>
+
+    <!-- Groq -->
+    <div style="background:#1a1a1a;border:1px solid #2a2a2a;border-radius:8px;padding:10px">
+      <div class="flex justify-between items-center mb-1">
+        <label class="font-bold text-gray-200">Groq API Key</label>
+        <span id="groq-badge" class="pill" style="font-size:9px">Not configured</span>
+      </div>
+      <input type="password" id="key-groq" placeholder="gsk_..." style="width:100%;background:#111;border:1px solid #333;border-radius:6px;padding:6px 10px;color:#fff;font-size:12px;outline:none;box-sizing:border-box">
+    </div>
+
+    <!-- Local LLM (Ollama) -->
+    <div style="background:#1a1a1a;border:1px solid #2a2a2a;border-radius:8px;padding:10px">
+      <label class="font-bold text-gray-200 block mb-1">Local LLM Base URL (Ollama, LM Studio, vLLM)</label>
+      <input type="text" id="url-ollama" placeholder="http://localhost:11434/v1" style="width:100%;background:#111;border:1px solid #333;border-radius:6px;padding:6px 10px;color:#fff;font-size:12px;outline:none;box-sizing:border-box">
+    </div>
+
+    <div class="pt-3 border-t border-gray-800 flex justify-between items-center">
+      <span id="provider-save-status" class="text-xs"></span>
+      <div class="flex gap-2">
+        <button onclick="closeProviderSettingsModal()" style="background:#222;color:#999;border:1px solid #333;border-radius:8px;padding:6px 14px;cursor:pointer">Cancel</button>
+        <button onclick="saveProviderSettings()" style="background:#4f46e5;color:#fff;border:none;border-radius:8px;padding:6px 16px;font-weight:600;cursor:pointer">Save & Apply Keys</button>
+      </div>
+    </div>
   </div>
 </div>
 

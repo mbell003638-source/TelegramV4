@@ -12,6 +12,8 @@ const { getDashboardHtml } = require('./dashboardHtml');
 const { channelEventBus, ChannelEvents } = require('./EventBus');
 const { globalAgentPool } = require('./AgentPool');
 const { globalSatelliteHub } = require('./SatelliteHub');
+const fs = require('fs');
+const path = require('path');
 
 class MissionControlServer {
     constructor({ database, sessionStore, actionExecutor, agents, port = 3141, token = null }) {
@@ -456,6 +458,89 @@ class MissionControlServer {
                         return this._sendJson(res, 200, { success: true, status: globalAgentPool.getStatus() });
                     }
                     return this._sendJson(res, 400, { error: 'maxConcurrent is required' });
+                }
+            }
+
+            // 7b. Provider Settings & API Keys (OpenClaw / Hermes model configuration)
+            if (pathname === '/api/settings/providers') {
+                if (req.method === 'GET') {
+                    const mask = (key) => key ? (key.slice(0, 7) + '...' + key.slice(-4)) : '';
+                    return this._sendJson(res, 200, {
+                        providers: {
+                            openrouter: {
+                                configured: !!process.env.OPENROUTER_API_KEY,
+                                masked: mask(process.env.OPENROUTER_API_KEY),
+                                label: 'OpenRouter (200+ models, DeepSeek R1, Claude, Llama 3)'
+                            },
+                            anthropic: {
+                                configured: !!process.env.ANTHROPIC_API_KEY,
+                                masked: mask(process.env.ANTHROPIC_API_KEY),
+                                label: 'Anthropic Claude'
+                            },
+                            openai: {
+                                configured: !!process.env.OPENAI_API_KEY,
+                                masked: mask(process.env.OPENAI_API_KEY),
+                                baseUrl: process.env.OPENAI_BASE_URL || '',
+                                label: 'OpenAI / Codex'
+                            },
+                            deepseek: {
+                                configured: !!process.env.DEEPSEEK_API_KEY,
+                                masked: mask(process.env.DEEPSEEK_API_KEY),
+                                baseUrl: process.env.DEEPSEEK_BASE_URL || '',
+                                label: 'DeepSeek'
+                            },
+                            groq: {
+                                configured: !!process.env.GROQ_API_KEY,
+                                masked: mask(process.env.GROQ_API_KEY),
+                                label: 'Groq'
+                            },
+                            ollama: {
+                                configured: !!process.env.OLLAMA_BASE_URL,
+                                baseUrl: process.env.OLLAMA_BASE_URL || 'http://localhost:11434/v1',
+                                label: 'Local LLM (Ollama / LM Studio / vLLM)'
+                            },
+                            gemini: {
+                                configured: !!process.env.GEMINI_API_KEY,
+                                masked: mask(process.env.GEMINI_API_KEY),
+                                label: 'Google Gemini'
+                            }
+                        }
+                    });
+                }
+
+                if (req.method === 'POST') {
+                    const body = await this._readBody(req);
+                    const envPath = path.resolve(__dirname, '..', '.env');
+                    let envContent = fs.existsSync(envPath) ? fs.readFileSync(envPath, 'utf8') : '';
+
+                    const keysToUpdate = {
+                        OPENROUTER_API_KEY: body.openrouterApiKey,
+                        ANTHROPIC_API_KEY: body.anthropicApiKey,
+                        OPENAI_API_KEY: body.openaiApiKey,
+                        OPENAI_BASE_URL: body.openaiBaseUrl,
+                        DEEPSEEK_API_KEY: body.deepseekApiKey,
+                        DEEPSEEK_BASE_URL: body.deepseekBaseUrl,
+                        GROQ_API_KEY: body.groqApiKey,
+                        OLLAMA_BASE_URL: body.ollamaBaseUrl,
+                        GEMINI_API_KEY: body.geminiApiKey,
+                    };
+
+                    for (const [key, val] of Object.entries(keysToUpdate)) {
+                        if (val !== undefined && val !== null && String(val).trim() !== '') {
+                            const trimmed = String(val).trim();
+                            process.env[key] = trimmed;
+                            const regex = new RegExp(`^#?\\s*${key}=.*$`, 'm');
+                            if (regex.test(envContent)) {
+                                envContent = envContent.replace(regex, `${key}=${trimmed}`);
+                            } else {
+                                envContent += `\n${key}=${trimmed}`;
+                            }
+                        }
+                    }
+
+                    fs.writeFileSync(envPath, envContent, 'utf8');
+                    this.broadcast('settings.updated', { success: true });
+                    return this._sendJson(res, 200, { ok: true, message: 'Provider API keys and URLs updated successfully!' });
                 }
             }
 

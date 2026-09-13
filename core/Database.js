@@ -161,6 +161,36 @@ class AssistantDatabase {
         `);
     }
 
+    seedDemoTasks() {
+        try {
+            const countRow = this.db.prepare('SELECT COUNT(*) as count FROM mission_tasks').get();
+            if (countRow && countRow.count === 0) {
+                const now = Date.now();
+                this.db.prepare(`
+                    INSERT INTO mission_tasks (id, title, prompt, assigned_agent, status, priority, created_by, created_at, result)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                `).run('task_welcome_1', 'Welcome to ClaudeClaw Mission Control', 'Verify swarm coordination and CLI engine adapters.', 'codex', 'completed', 2, 'system', now - 3600000, 'All CLI engines initialized.');
+
+                this.db.prepare(`
+                    INSERT INTO mission_tasks (id, title, prompt, assigned_agent, status, priority, created_by, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                `).run('task_providers_2', 'Configure Providers & API Keys', 'Open Provider Settings to configure OpenRouter, OpenAI, Anthropic, DeepSeek, or Ollama.', 'grok', 'in_progress', 1, 'system', now - 1800000);
+
+                this.db.prepare(`
+                    INSERT INTO mission_tasks (id, title, prompt, assigned_agent, status, priority, created_by, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                `).run('task_swarm_3', 'Multi-Agent Hive Mind Delegation', 'Test multi-agent collaboration and tool execution via chat or Kanban.', 'claude', 'queued', 0, 'system', now);
+            }
+
+            const hiveRow = this.db.prepare('SELECT COUNT(*) as count FROM hive_mind').get();
+            if (hiveRow && hiveRow.count === 0) {
+                this.recordHiveMind('system', 'dashboard_chat', 'swarm_initialized', 'ClaudeClaw Super Assistant online with 8 CLI engines.');
+            }
+        } catch (e) {
+            console.warn('[Database] Seed notice:', e.message);
+        }
+    }
+
     // =========================================================================
     //  MISSION CONTROL KANBAN TASKS
     // =========================================================================
@@ -431,6 +461,7 @@ function getDatabase(dbDir = path.join(__dirname, '..', 'store')) {
             ? (path.isAbsolute(process.env.DB_PATH) ? process.env.DB_PATH : path.join(__dirname, '..', process.env.DB_PATH))
             : path.join(dbDir, 'assistant.db');
         instance = new AssistantDatabase(dbPath);
+        instance.seedDemoTasks();
     }
     return instance;
 }

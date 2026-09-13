@@ -69,7 +69,7 @@ test('MissionControl web server answers API endpoints and accepts tasks', async 
         database: db,
         sessionStore: { getActiveAgent: () => 'antigravity' },
         agents: { antigravity: { name: 'Antigravity', emoji: '🤖' } },
-        port: 3149,
+        port: 3159,
         token: 'unit_test_token',
     });
 
@@ -77,14 +77,14 @@ test('MissionControl web server answers API endpoints and accepts tasks', async 
     assert.equal(started, true);
 
     // 1. GET /api/info
-    const infoRes = await fetch('http://localhost:3149/api/info?token=unit_test_token');
+    const infoRes = await fetch('http://localhost:3159/api/info?token=unit_test_token');
     assert.equal(infoRes.status, 200);
     const info = await infoRes.json();
     assert.equal(info.status, 'online');
     assert.equal(info.activeAgent, 'antigravity');
 
     // 2. POST /api/mission/tasks
-    const postRes = await fetch('http://localhost:3149/api/mission/tasks?token=unit_test_token', {
+    const postRes = await fetch('http://localhost:3159/api/mission/tasks?token=unit_test_token', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -98,7 +98,7 @@ test('MissionControl web server answers API endpoints and accepts tasks', async 
     assert.equal(postData.task.title, 'Automated Test Task');
 
     // 3. GET /api/mission/tasks
-    const listRes = await fetch('http://localhost:3149/api/mission/tasks?token=unit_test_token');
+    const listRes = await fetch('http://localhost:3159/api/mission/tasks?token=unit_test_token');
     assert.equal(listRes.status, 200);
     const list = await listRes.json();
     assert.equal(list.tasks.length, 1);
