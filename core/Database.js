@@ -186,6 +186,40 @@ class AssistantDatabase {
             if (hiveRow && hiveRow.count === 0) {
                 this.recordHiveMind('system', 'dashboard_chat', 'swarm_initialized', 'ClaudeClaw Super Assistant online with 8 CLI engines.');
             }
+
+            const memRow = this.db.prepare('SELECT COUNT(*) as count FROM memories').get();
+            if (memRow && memRow.count === 0) {
+                this.addMemory('global', 'User Profile & Preferences: Handle: Ahemnani. Mode: Autonomous YOLO execution. Style: Direct, technical, and concise.', {
+                    summary: 'User Profile: Ahemnani (Autonomous YOLO mode, concise technical style)',
+                    importance: 0.95,
+                    salience: 1.0,
+                    source: 'user_profile'
+                });
+                this.addMemory('global', 'System Protocol: Clean single-turn responses for basic greetings. Proactive agent delegation across domain tasks.', {
+                    summary: 'System Rules: Concise greeting responses and proactive multi-agent delegation',
+                    importance: 0.90,
+                    salience: 0.95,
+                    source: 'system_rules'
+                });
+                this.addMemory('global', 'Infrastructure Context: Modular Telegram Bridge v4 architecture with Web Mission Control HUD & TCP lock on port 47200.', {
+                    summary: 'Infrastructure: Modular v4 architecture with Browser HUD & TCP lock',
+                    importance: 0.85,
+                    salience: 0.90,
+                    source: 'infrastructure'
+                });
+                this.addMemory('global', 'Swarm Composition: 8 Specialized CLI engines (Antigravity, OpenCode, Codex, Claude, OpenClaw, Hermes, Pi, Grok) with live stdio/ACP.', {
+                    summary: 'Swarm: 8 CLI engines configured with model discovery and tool execution',
+                    importance: 0.80,
+                    salience: 0.85,
+                    source: 'swarm_registry'
+                });
+                this.addMemory('global', 'War Room HUD: Multi-agent council deliberation (/discuss) with Antigravity as Consolidator synthesizer.', {
+                    summary: 'War Room: Virtual boardroom council and morning standup roll call',
+                    importance: 0.75,
+                    salience: 0.80,
+                    source: 'warroom'
+                });
+            }
         } catch (e) {
             console.warn('[Database] Seed notice:', e.message);
         }
@@ -312,11 +346,11 @@ class AssistantDatabase {
     getMemories(chatId, { minSalience = 0.1, limit = 20 } = {}) {
         const stmt = this.db.prepare(`
             SELECT * FROM memories
-            WHERE chat_id = ? AND salience >= ?
+            WHERE (chat_id = ? OR chat_id = 'global' OR ? = '' OR ? IS NULL) AND salience >= ?
             ORDER BY salience DESC, accessed_at DESC
             LIMIT ?
         `);
-        return stmt.all(chatId, minSalience, limit);
+        return stmt.all(chatId || 'global', chatId || '', chatId || '', minSalience, limit);
     }
 
     decayMemories(chatId, decayFactor = 0.95) {

@@ -817,7 +817,9 @@ function salienceColor(s) {
 }
 
 function formatDate(ts) {
-  const d = new Date(ts * 1000);
+  if (!ts) return '';
+  const ms = Number(ts) > 1e11 ? Number(ts) : Number(ts) * 1000;
+  const d = new Date(ms);
   return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) + ' ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
@@ -897,7 +899,8 @@ async function openInsightsDrawer() {
       return;
     }
     document.getElementById('drawer-body').innerHTML = insights.map(function(c) {
-      var date = new Date(c.created_at * 1000).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+      var ms = Number(c.created_at) > 1e11 ? Number(c.created_at) : Number(c.created_at) * 1000;
+      var date = new Date(ms).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
       return '<div style="background:#1a1a1a;border:1px solid #2a2a2a;border-radius:8px;padding:12px;margin-bottom:8px">' +
         '<div class="text-xs text-purple-400 mb-1">' + date + '</div>' +
         '<div class="text-sm text-white mb-2">' + escapeHtml(c.insight || c.summary) + '</div>' +
@@ -1099,7 +1102,7 @@ async function loadMemories() {
 
     // Timeline
     if (memTimelineChart) memTimelineChart.destroy();
-    if (data.timeline.length > 0) {
+    if (data.timeline && data.timeline.length > 0) {
       memTimelineChart = new Chart(document.getElementById('memory-timeline-chart'), {
         type: 'line',
         data: {
@@ -1162,7 +1165,7 @@ async function loadTokens() {
 
     // Usage timeline (turns per day)
     if (costChart) costChart.destroy();
-    if (data.costTimeline.length > 0) {
+    if (data.costTimeline && data.costTimeline.length > 0) {
       costChart = new Chart(document.getElementById('cost-chart'), {
         type: 'line',
         data: {

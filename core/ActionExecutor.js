@@ -65,6 +65,11 @@ function clipText(value, max) {
 
 function buildSharedPrompt(text, options = {}) {
     if (!text) return text;
+
+    // For simple greetings: omit past multi-turn transcripts to avoid bloated responses
+    const clean = text.trim().toLowerCase();
+    const isBasicGreeting = /^(hi|hello|hey|greetings|howdy|good\s+(morning|evening|afternoon))[\s!.]*$/i.test(clean);
+
     const {
         memories = '',
         recentTurns = [],
@@ -78,12 +83,12 @@ function buildSharedPrompt(text, options = {}) {
         parts.push(`Persistent shared memories (follow these; they apply for every agent):\n${String(memories).trim()}`);
     }
 
-    const turns = Array.isArray(recentTurns) ? recentTurns.slice(-Math.max(1, maxTurns)) : [];
+    const turns = (!isBasicGreeting && Array.isArray(recentTurns)) ? recentTurns.slice(-Math.max(1, maxTurns)) : [];
     if (turns.length > 0) {
         const transcript = turns.map((turn) => {
             const name = turn.agentName || turn.agent || 'agent';
             const user = clipText(turn.userText, 500);
-            const assistant = clipText(turn.assistantText, 700);
+            const assistant = clipText(turn.assistantText, 500);
             return `[${name}]\nUser: ${user}\nAssistant: ${assistant}`;
         }).join('\n\n');
         parts.push(`Shared recent conversation across agents. Continue this work; do not restart from scratch.\n${transcript}`);

@@ -66,6 +66,10 @@ const LOCK_PORT = config.lockPort;
 const lockServer = net.createServer();
 lockServer.once('error', (err) => {
     if (err.code === 'EADDRINUSE') {
+        if (process.env.DISABLE_TELEGRAM === 'true' || process.env.ALLOW_CONCURRENT_HUD === 'true') {
+            console.log(`[Singleton] Port ${LOCK_PORT} in use; running in Standalone Web HUD mode.`);
+            return;
+        }
         const msg = 'Another v4 instance is already running (port lock). Exiting with code 2.';
         console.error(`[${new Date().toISOString()}] ${msg}`);
         try { fs.appendFileSync('crash.log', `[${new Date().toISOString()}] ${msg}\n`); } catch(e) {}
