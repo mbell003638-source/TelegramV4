@@ -337,9 +337,14 @@ async function saveProviderSettings() {
         </div>
         <p class="text-xs text-gray-400 mt-0.5">Voice standup with your agent team</p>
       </div>
-      <button onclick="startWarRoomStandup()" style="background:#2563eb;color:#fff;border:none;border-radius:8px;padding:8px 16px;font-size:12px;font-weight:600;cursor:pointer;display:flex;align-items:center;gap:6px;box-shadow:0 4px 12px rgba(37,99,235,0.3)">
-        <span>🎙️</span> Start Voice Standup
-      </button>
+      <div class="flex items-center gap-2">
+        <button onclick="startTextStandup()" style="background:#0f766e;color:#fff;border:none;border-radius:8px;padding:8px 16px;font-size:12px;font-weight:600;cursor:pointer;display:flex;align-items:center;gap:6px;box-shadow:0 4px 12px rgba(15,118,110,0.3)">
+          <span>📝</span> Text Standup
+        </button>
+        <button onclick="startWarRoomStandup()" style="background:#2563eb;color:#fff;border:none;border-radius:8px;padding:8px 16px;font-size:12px;font-weight:600;cursor:pointer;display:flex;align-items:center;gap:6px;box-shadow:0 4px 12px rgba(37,99,235,0.3)">
+          <span>🎙️</span> Voice Standup
+        </button>
+      </div>
     </div>
   </div>
 
@@ -2422,15 +2427,41 @@ function toggleWarRoomTts() {
   }
 }
 
-async function startWarRoomStandup() {
+async function startTextStandup() {
+  warRoomTtsEnabled = false;
+  const btn = document.getElementById('warroom-tts-toggle');
+  if (btn) {
+    btn.textContent = '🔇 Voice Muted';
+    btn.style.color = '#f87171';
+  }
+  const titleEl = document.getElementById('warroom-modal-title');
+  if (titleEl) {
+    titleEl.innerHTML = 'WAR ROOM &middot; LIVE TEXT STANDUP <span style="font-size:10px;color:#14b8a6;margin-left:4px">[SILENT]</span>';
+  }
   try {
     fetch(BASE + '/api/warroom/standup?token=' + TOKEN, { method: 'POST' }).catch(() => {});
   } catch(e) {}
-
-  openWarRoomModal();
+  openWarRoomModal(true);
 }
 
-function openWarRoomModal() {
+async function startWarRoomStandup() {
+  warRoomTtsEnabled = true;
+  const btn = document.getElementById('warroom-tts-toggle');
+  if (btn) {
+    btn.textContent = '🔊 Voice On';
+    btn.style.color = '#94a3b8';
+  }
+  const titleEl = document.getElementById('warroom-modal-title');
+  if (titleEl) {
+    titleEl.innerHTML = 'WAR ROOM &middot; LIVE VOICE STANDUP <span style="font-size:10px;color:#38bdf8;margin-left:4px">[VOICE]</span>';
+  }
+  try {
+    fetch(BASE + '/api/warroom/standup?token=' + TOKEN, { method: 'POST' }).catch(() => {});
+  } catch(e) {}
+  openWarRoomModal(false);
+}
+
+function openWarRoomModal(isTextMode = false) {
   warRoomActive = true;
   warRoomSeconds = 0;
   const overlay = document.getElementById('warroom-overlay');
@@ -2447,7 +2478,7 @@ function openWarRoomModal() {
   const transcript = document.getElementById('warroom-transcript');
   transcript.innerHTML = '';
   document.getElementById('warroom-timer').textContent = '00:00';
-  document.getElementById('warroom-speaker-status').textContent = 'Swarm convening roll call...';
+  document.getElementById('warroom-speaker-status').textContent = isTextMode ? 'Swarm text roll call convening...' : 'Swarm convening roll call...';
 
   if (warRoomTimerInterval) clearInterval(warRoomTimerInterval);
   warRoomTimerInterval = setInterval(() => {
@@ -2456,7 +2487,7 @@ function openWarRoomModal() {
     if (t) t.textContent = formatWarRoomTime(warRoomSeconds);
   }, 1000);
 
-  runSwarmRollCall();
+  runSwarmRollCall(isTextMode);
 }
 
 function endWarRoomStandup() {
@@ -2481,7 +2512,7 @@ function endWarRoomStandup() {
   loadHiveMind();
 }
 
-function runSwarmRollCall() {
+function runSwarmRollCall(isTextMode = false) {
   const steps = [
     {
       agentId: 'antigravity',
@@ -2506,6 +2537,18 @@ function runSwarmRollCall() {
       name: 'Grok',
       voice: (typeof warRoomVoices !== 'undefined' && warRoomVoices['grok']) || 'Fenrir',
       text: 'Grok standby. Real-time telemetry monitoring active. What are your orders?'
+    },
+    {
+      agentId: 'openclaw',
+      name: 'OpenClaw',
+      voice: (typeof warRoomVoices !== 'undefined' && warRoomVoices['openclaw']) || 'Leda',
+      text: 'OpenClaw local tools ready. Hardware and workspace isolation healthy.'
+    },
+    {
+      agentId: 'hermes',
+      name: 'Hermes',
+      voice: (typeof warRoomVoices !== 'undefined' && warRoomVoices['hermes']) || 'Kore',
+      text: 'Hermes tool reasoning and scratchpad planning online.'
     }
   ];
 
@@ -2514,20 +2557,24 @@ function runSwarmRollCall() {
     if (!warRoomActive || idx >= steps.length) {
       setSpeakingAgent(null);
       const st = document.getElementById('warroom-speaker-status');
-      if (st) st.textContent = 'Standup active &middot; Speak or type below';
+      if (st) st.textContent = isTextMode ? 'Text Standup active · Type your message below (or click an agent to target)' : 'Standup active · Speak or type below';
       return;
     }
     const item = steps[idx++];
     setSpeakingAgent(item.agentId);
     const st = document.getElementById('warroom-speaker-status');
-    if (st) st.textContent = item.name + ' speaking...';
+    if (st) st.textContent = item.name + (isTextMode ? ' reporting...' : ' speaking...');
     addTranscriptLine(item.name, item.voice, item.text, 'agent');
-    speakText(item.text, item.voice, () => {
-      setTimeout(nextStep, 400);
-    });
+    if (isTextMode) {
+      setTimeout(nextStep, 250);
+    } else {
+      speakText(item.text, item.voice, () => {
+        setTimeout(nextStep, 400);
+      });
+    }
   }
 
-  setTimeout(nextStep, 600);
+  setTimeout(nextStep, isTextMode ? 100 : 600);
 }
 
 async function sendWarRoomSpeech(customText) {
@@ -3132,7 +3179,7 @@ async function abortProcessing() {
     <div class="flex items-center gap-3">
       <span class="flex items-center gap-2">
         <span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:#ef4444;box-shadow:0 0 10px #ef4444;animation:pulse 1s infinite"></span>
-        <span class="text-xs font-bold text-white tracking-wider">WAR ROOM &middot; LIVE VOICE STANDUP</span>
+        <span id="warroom-modal-title" class="text-xs font-bold text-white tracking-wider">WAR ROOM &middot; LIVE STANDUP</span>
       </span>
       <span id="warroom-timer" class="font-mono text-xs text-blue-400 bg-blue-950/60 px-2 py-0.5 rounded border border-blue-800">00:00</span>
     </div>
