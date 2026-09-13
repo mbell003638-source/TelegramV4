@@ -700,17 +700,42 @@ class MissionControlServer {
                 return this._sendJson(res, 200, { ok: true, agentId: activeAgentId, agentName, reply });
             }
 
-            // 9. Live Meetings Dispatch (Pika, Recall.ai, Daily.co)
+            // 9. Live Meetings Dispatch (Google Meet, Pika, Recall.ai, Daily.co)
             if (pathname === '/api/meetings') {
                 if (req.method === 'GET') {
                     return this._sendJson(res, 200, { sessions: this._meetingSessions || [] });
                 }
+                if (req.method === 'DELETE') {
+                    this._meetingSessions = [];
+                    this.broadcast('meeting.cleared', {});
+                    return this._sendJson(res, 200, { ok: true, message: 'All meeting sessions cleared' });
+                }
             }
+
+            if (pathname.startsWith('/api/meetings/') && req.method === 'DELETE') {
+                const sessionId = pathname.slice('/api/meetings/'.length);
+                if (this._meetingSessions) {
+                    const idx = this._meetingSessions.findIndex(s => s.id === sessionId);
+                    if (idx !== -1) {
+                        const removed = this._meetingSessions.splice(idx, 1)[0];
+                        this.db.recordHiveMind(removed.agentId || 'system', 'live_meetings', 'meeting_ended', `Meeting link for ${removed.agentId} (${removed.provider}) was removed.`);
+                        this.broadcast('meeting.removed', { id: sessionId });
+                        return this._sendJson(res, 200, { ok: true, message: 'Meeting session removed' });
+                    }
+                }
+                return this._sendJson(res, 404, { error: 'Session not found' });
+            }
+
             if (pathname === '/api/meetings/dispatch' && req.method === 'POST') {
                 const body = await this._readBody(req);
                 const provider = body.provider || 'daily';
                 const agentId = body.agentId || 'claude';
                 let meetUrl = body.meetUrl && body.meetUrl.trim();
+
+                // If Google Meet mode and no custom URL provided, point to https://meet.google.com/new
+                if (!meetUrl && (provider === 'google' || provider === 'meet')) {
+                    meetUrl = 'https://meet.google.com/new';
+                }
 
                 // If Daily.co mode and no custom URL provided, provision a real room
                 if (!meetUrl && provider === 'daily') {

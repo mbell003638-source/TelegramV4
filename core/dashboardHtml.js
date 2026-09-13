@@ -356,6 +356,25 @@ async function saveProviderSettings() {
       <p class="text-xs text-gray-400">Send an agent into a Google Meet. Pick avatar or voice-only below.</p>
     </div>
 
+    <!-- Google Meet Direct -->
+    <div style="background:#141414;border:1px solid #2a2a2a;border-radius:10px;padding:12px;margin-bottom:12px">
+      <div class="flex items-center justify-between mb-2">
+        <div class="flex items-center gap-1.5">
+          <span style="font-size:14px">🎥</span>
+          <span class="text-xs font-bold text-amber-400">Google Meet</span>
+        </div>
+        <div class="flex items-center gap-2">
+          <a href="https://meet.google.com/new" target="_blank" style="color:#60a5fa;text-decoration:none;font-size:11px;background:#1e293b;border:1px solid #334155;border-radius:4px;padding:2px 8px">+ Open new Meet room ↗</a>
+          <span class="text-xs text-gray-500">Official Google Meet</span>
+        </div>
+      </div>
+      <div class="flex gap-2">
+        <select id="google-agent-select" style="background:#1f1f1f;border:1px solid #333;border-radius:6px;padding:6px 10px;color:#fff;font-size:12px;outline:none"></select>
+        <input type="text" id="google-url-input" placeholder="Paste Google Meet URL (e.g. https://meet.google.com/abc-defg-hij), or leave empty for instant room" style="flex:1;background:#111;border:1px solid #333;border-radius:6px;padding:6px 10px;color:#fff;font-size:12px;outline:none">
+        <button onclick="dispatchMeeting('google')" style="background:#d97706;color:#fff;border:none;border-radius:6px;padding:6px 16px;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap">Dispatch to Meet</button>
+      </div>
+    </div>
+
     <!-- Avatar mode · Pika -->
     <div style="background:#141414;border:1px solid #2a2a2a;border-radius:10px;padding:12px;margin-bottom:12px">
       <div class="flex items-center justify-between mb-2">
@@ -404,7 +423,10 @@ async function saveProviderSettings() {
 
     <!-- Active Sessions -->
     <div class="mt-4 pt-3 border-t border-gray-800">
-      <h4 class="text-xs font-bold text-gray-500 uppercase tracking-wider mb-2">Active Sessions</h4>
+      <div class="flex items-center justify-between mb-2">
+        <h4 class="text-xs font-bold text-gray-500 uppercase tracking-wider">Active Sessions</h4>
+        <button onclick="clearAllMeetingSessions()" style="background:none;border:none;color:#6b7280;font-size:11px;cursor:pointer" title="Clear all meeting links">Clear All &times;</button>
+      </div>
       <div id="meeting-sessions-list" class="text-xs text-gray-500">No active sessions</div>
     </div>
   </div>
@@ -1218,7 +1240,7 @@ async function loadAgents() {
     }).join('');
 
     // Populate meeting agent selectors
-    const meetingSelects = ['pika-agent-select', 'recall-agent-select', 'daily-agent-select'];
+    const meetingSelects = ['google-agent-select', 'pika-agent-select', 'recall-agent-select', 'daily-agent-select'];
     meetingSelects.forEach(selId => {
       const el = document.getElementById(selId);
       if (el && data.agents) {
@@ -2586,7 +2608,13 @@ function toggleWarRoomMic() {
 
 async function dispatchMeeting(provider) {
   let agentId = 'claude', meetUrl = '', mode = 'direct', autoBrief = false;
-  if (provider === 'pika') {
+  if (provider === 'google') {
+    const el = document.getElementById('google-agent-select');
+    if (el) agentId = el.value;
+    const urlEl = document.getElementById('google-url-input');
+    if (urlEl) meetUrl = urlEl.value.trim();
+    if (!meetUrl) meetUrl = 'https://meet.google.com/new';
+  } else if (provider === 'pika') {
     const el = document.getElementById('pika-agent-select');
     if (el) agentId = el.value;
     const urlEl = document.getElementById('pika-url-input');
@@ -2622,6 +2650,31 @@ async function dispatchMeeting(provider) {
   } catch(e) { alert('Failed to dispatch meeting: ' + e.message); }
 }
 
+async function removeMeetingSession(sessionId) {
+  try {
+    const res = await fetch(BASE + '/api/meetings/' + encodeURIComponent(sessionId) + '?token=' + TOKEN, {
+      method: 'DELETE'
+    });
+    const data = await res.json();
+    if (data.ok) {
+      loadMeetingSessions();
+      loadHiveMind();
+    }
+  } catch(e) { console.error('Failed to remove meeting:', e); }
+}
+
+async function clearAllMeetingSessions() {
+  if (!confirm('Remove all created meeting links?')) return;
+  try {
+    const res = await fetch(BASE + '/api/meetings?token=' + TOKEN, { method: 'DELETE' });
+    const data = await res.json();
+    if (data.ok) {
+      loadMeetingSessions();
+      loadHiveMind();
+    }
+  } catch(e) { console.error('Failed to clear meetings:', e); }
+}
+
 async function loadMeetingSessions() {
   try {
     const res = await api('/api/meetings');
@@ -2638,7 +2691,10 @@ async function loadMeetingSessions() {
           '<span class="text-xs text-white font-semibold">[' + s.provider.toUpperCase() + '] ' + s.agentId + '</span>' +
           '<div class="text-xs text-blue-400 mt-0.5"><a href="' + escapeHtml(s.meetUrl) + '" target="_blank" class="underline">' + escapeHtml(s.meetUrl) + '</a></div>' +
         '</div>' +
-        '<span class="text-xs text-gray-500">' + timeAgo(s.createdAt) + '</span>' +
+        '<div class="flex items-center gap-3">' +
+          '<span class="text-xs text-gray-500">' + timeAgo(s.createdAt) + '</span>' +
+          '<button data-id="' + s.id + '" onclick="removeMeetingSession(this.dataset.id)" style="background:#222;border:1px solid #333;color:#f87171;border-radius:6px;width:24px;height:24px;display:flex;align-items:center;justify-content:center;font-size:14px;cursor:pointer;line-height:1" title="Remove meeting link">&times;</button>' +
+        '</div>' +
       '</div>'
     ).join('');
   } catch {}
