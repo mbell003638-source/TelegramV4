@@ -303,7 +303,10 @@ async function saveProviderSettings() {
 
 <!-- Hive Mind Feed -->
 <div id="hive-section" class="mb-5">
-  <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-2">Hive Mind<button class="privacy-toggle" onclick="toggleSectionBlur('hive')" title="Toggle blur">&#128065;</button></h2>
+  <div class="flex items-center justify-between mb-2">
+    <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wider">Hive Mind<button class="privacy-toggle" onclick="toggleSectionBlur('hive')" title="Toggle blur">&#128065;</button></h2>
+    <button onclick="clearHiveMind()" style="background:none;border:none;color:#6b7280;font-size:12px;cursor:pointer" title="Clear Hive Mind records">Clear &times;</button>
+  </div>
   <div id="hive-container" class="card hive-scroll">
     <div class="text-gray-500 text-sm">Loading...</div>
   </div>
@@ -802,26 +805,41 @@ function cronToHuman(cron) {
 }
 
 function timeAgo(ts) {
-  const diff = Math.floor(Date.now()/1000) - ts;
+  if (!ts) return '';
+  const s = ts > 1e11 ? Math.floor(ts / 1000) : ts;
+  const diff = Math.max(0, Math.floor(Date.now() / 1000) - s);
   if (diff < 60) return diff + 's ago';
-  if (diff < 3600) return Math.floor(diff/60) + 'm ago';
-  if (diff < 86400) return Math.floor(diff/3600) + 'h ago';
-  return Math.floor(diff/86400) + 'd ago';
+  if (diff < 3600) return Math.floor(diff / 60) + 'm ago';
+  if (diff < 86400) return Math.floor(diff / 3600) + 'h ago';
+  return Math.floor(diff / 86400) + 'd ago';
 }
 
 function countdown(ts) {
-  const diff = ts - Math.floor(Date.now()/1000);
+  if (!ts) return '';
+  const s = ts > 1e11 ? Math.floor(ts / 1000) : ts;
+  const diff = s - Math.floor(Date.now() / 1000);
   if (diff <= 0) return 'now';
   if (diff < 60) return diff + 's';
-  if (diff < 3600) return Math.floor(diff/60) + 'm';
-  if (diff < 86400) return Math.floor(diff/3600) + 'h ' + Math.floor((diff%3600)/60) + 'm';
-  return Math.floor(diff/86400) + 'd';
+  if (diff < 3600) return Math.floor(diff / 60) + 'm';
+  if (diff < 86400) return Math.floor(diff / 3600) + 'h ' + Math.floor((diff % 3600) / 60) + 'm';
+  return Math.floor(diff / 86400) + 'd';
 }
+
 function elapsed(ts) {
-  const diff = Math.floor(Date.now()/1000) - ts;
-  if (diff < 60) return diff + 's';
-  if (diff < 3600) return Math.floor(diff/60) + 'm ' + (diff%60) + 's';
-  return Math.floor(diff/3600) + 'h ' + Math.floor((diff%3600)/60) + 'm';
+  if (!ts) return '';
+  const s = ts > 1e11 ? Math.floor(ts / 1000) : ts;
+  const diff = Math.max(0, Math.floor(Date.now() / 1000) - s);
+  if (diff < 60) return diff + 's ago';
+  if (diff < 3600) return Math.floor(diff / 60) + 'm ' + (diff % 60) + 's ago';
+  return Math.floor(diff / 3600) + 'h ' + Math.floor((diff % 3600) / 60) + 'm ago';
+}
+
+async function clearHiveMind() {
+  if (!confirm('Clear all Hive Mind entries?')) return;
+  try {
+    await fetch(BASE + '/api/hive-mind?token=' + TOKEN, { method: 'DELETE' });
+    await loadHiveMind();
+  } catch(e) { console.error('Clear Hive Mind failed:', e); }
 }
 
 async function taskAction(id, action) {

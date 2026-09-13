@@ -435,6 +435,12 @@ class MissionControlServer {
                     return this._sendJson(res, 200, { task });
                 }
 
+                if (req.method === 'POST' && (parts[5] === 'cancel' || pathname.endsWith('/cancel'))) {
+                    const task = this.db.updateMissionTaskStatus(taskId, 'cancelled');
+                    this.broadcast('mission.task_updated', task);
+                    return this._sendJson(res, 200, { ok: true, task });
+                }
+
                 if (req.method === 'DELETE') {
                     this.db.deleteMissionTask(taskId);
                     this.broadcast('mission.task_deleted', { id: taskId });
@@ -444,6 +450,11 @@ class MissionControlServer {
 
             // 4. Hive Mind Entries
             if (pathname === '/api/hive-mind') {
+                if (req.method === 'DELETE') {
+                    this.db.clearHiveMind();
+                    this.broadcast('hive.cleared', {});
+                    return this._sendJson(res, 200, { ok: true });
+                }
                 const entries = this.db.getHiveMindEntries({
                     agentId: query.agentId,
                     limit: Number(query.limit) || 30,

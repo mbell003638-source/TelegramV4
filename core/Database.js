@@ -237,7 +237,7 @@ class AssistantDatabase {
         if (status === 'in_progress') {
             sql += ', started_at = ?';
             params.push(now);
-        } else if (status === 'completed' || status === 'failed') {
+        } else if (status === 'completed' || status === 'failed' || status === 'cancelled') {
             sql += ', completed_at = ?';
             params.push(now);
             if (result !== null) {
@@ -289,6 +289,10 @@ class AssistantDatabase {
         sql += ' ORDER BY created_at DESC LIMIT ?';
         params.push(limit);
         return this.db.prepare(sql).all(...params);
+    }
+
+    clearHiveMind() {
+        this.db.prepare('DELETE FROM hive_mind').run();
     }
 
     // =========================================================================
