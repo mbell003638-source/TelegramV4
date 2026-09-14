@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { removeMeetingSession } from '@/lib/meetings';
+import { bridgeUrl } from '@/lib/config';
 
 export async function DELETE(
   request: Request,
@@ -11,7 +12,7 @@ export async function DELETE(
 
     // Also forward to telegram bridge if active
     try {
-      await fetch(`http://127.0.0.1:3141/api/meetings/${encodeURIComponent(sessionId)}?token=earlyaidopters`, {
+      await fetch(bridgeUrl(`/api/meetings/${encodeURIComponent(sessionId)}`), {
         method: 'DELETE'
       });
     } catch {}

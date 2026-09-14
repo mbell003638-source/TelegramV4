@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getMeetingSessions, clearMeetingSessions } from '@/lib/meetings';
+import { bridgeUrl } from '@/lib/config';
 
 export async function GET() {
   try {
@@ -15,7 +16,7 @@ export async function DELETE() {
     clearMeetingSessions();
     // Also try to clear in telegram bridge if running
     try {
-      await fetch('http://127.0.0.1:3141/api/meetings?token=earlyaidopters', {
+      await fetch(bridgeUrl('/api/meetings'), {
         method: 'DELETE'
       });
     } catch {}

@@ -25,6 +25,7 @@ import {
 import VoiceButton from '@/components/VoiceButton';
 import { AgentInfo, ChatMessage } from '@/lib/types';
 import ReactiveOrb, { OrbState } from '@/components/ReactiveOrb';
+import { BRIDGE_URL } from '@/lib/config';
 
 const KNOWN_AGENTS: Record<string, AgentInfo> = {
   antigravity: {
@@ -37,7 +38,7 @@ const KNOWN_AGENTS: Record<string, AgentInfo> = {
     status: 'live',
     description: 'Google Deepmind Advanced Agentic Coding engine with multi-agent coordination, subagents, and skills.',
     category: 'router',
-    binaryPath: 'C:\\Users\\just2\\AppData\\Local\\agy\\bin\\agy.exe'
+    binaryPath: null
   },
   claude: {
     id: 'claude',
@@ -49,7 +50,7 @@ const KNOWN_AGENTS: Record<string, AgentInfo> = {
     status: 'live',
     description: 'Anthropic Claude Code CLI subprocess with autonomous tool execution.',
     category: 'core',
-    binaryPath: 'C:\\Users\\just2\\.local\\bin\\claude.exe'
+    binaryPath: null
   },
   grok: {
     id: 'grok',
@@ -61,7 +62,7 @@ const KNOWN_AGENTS: Record<string, AgentInfo> = {
     status: 'live',
     description: 'xAI Grok terminal intelligence with real-time web telemetry and uncensored analysis.',
     category: 'core',
-    binaryPath: 'C:\\Users\\just2\\.grok\\bin\\grok.exe'
+    binaryPath: null
   },
   hermes: {
     id: 'hermes',
@@ -73,7 +74,7 @@ const KNOWN_AGENTS: Record<string, AgentInfo> = {
     status: 'live',
     description: 'Nous Research Hermes agent with scratchpad and function call synthesis.',
     category: 'core',
-    binaryPath: 'C:\\Users\\just2\\AppData\\Local\\hermes\\bin\\hermes.exe'
+    binaryPath: null
   },
   codex: {
     id: 'codex',
@@ -85,7 +86,7 @@ const KNOWN_AGENTS: Record<string, AgentInfo> = {
     status: 'live',
     description: 'High-speed coding execution engine with full filesystem access.',
     category: 'coding',
-    binaryPath: 'C:\\Users\\just2\\AppData\\Local\\Programs\\OpenAI\\Codex\\bin\\codex.exe'
+    binaryPath: null
   }
 };
 
@@ -376,7 +377,7 @@ export default function AgentChatPage() {
         id: 'net-err-' + Date.now(),
         role: 'agent',
         speaker: agent.name,
-        text: `[Network Error]: Unable to reach local agent bridge on port 3141. Ensure bridge is running in standalone mode.`,
+        text: `[Network Error]: Unable to reach the agent bridge at ${BRIDGE_URL}. Ensure the bridge is running in standalone mode.`,
         timestamp: Date.now(),
         agentId: agent.id,
       };
@@ -620,18 +621,31 @@ export default function AgentChatPage() {
       </header>
 
       {/* Binary Path Sub-banner */}
-      {agent.binaryPath && (
-        <div className="flex-none bg-[#030612] px-6 py-1.5 border-b border-blue-950/40 flex items-center justify-between text-[11px] font-mono text-gray-400">
-          <div className="flex items-center gap-2 truncate">
-            <Terminal className="w-3.5 h-3.5 text-sky-400 flex-shrink-0" />
-            <span className="text-gray-500">Binary:</span>
-            <span className="text-sky-300 truncate">{agent.binaryPath}</span>
+      {!loadingAgent && (
+        agent.binaryPath ? (
+          <div className="flex-none bg-[#030612] px-6 py-1.5 border-b border-blue-950/40 flex items-center justify-between text-[11px] font-mono text-gray-400">
+            <div className="flex items-center gap-2 truncate">
+              <Terminal className="w-3.5 h-3.5 text-sky-400 flex-shrink-0" />
+              <span className="text-gray-500">Binary:</span>
+              <span className="text-sky-300 truncate">{agent.binaryPath}</span>
+            </div>
+            <div className="flex items-center gap-1.5 text-emerald-400 flex-shrink-0">
+              <ShieldCheck className="w-3.5 h-3.5" />
+              <span>Authenticated</span>
+            </div>
           </div>
-          <div className="flex items-center gap-1.5 text-emerald-400 flex-shrink-0">
-            <ShieldCheck className="w-3.5 h-3.5" />
-            <span>Authenticated</span>
+        ) : (
+          <div className="flex-none bg-[#030612] px-6 py-1.5 border-b border-blue-950/40 flex items-center justify-between text-[11px] font-mono text-gray-500">
+            <div className="flex items-center gap-2 truncate">
+              <Terminal className="w-3.5 h-3.5 text-gray-600 flex-shrink-0" />
+              <span className="text-gray-500">Binary:</span>
+              <span className="italic">Not detected on this machine</span>
+            </div>
+            <div className="flex items-center gap-1.5 text-amber-400 flex-shrink-0">
+              <span>Bridge-routed</span>
+            </div>
           </div>
-        </div>
+        )
       )}
 
       {/* Horizontal Session Tabs Bar */}

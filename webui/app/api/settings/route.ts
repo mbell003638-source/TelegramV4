@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { getVaultPath, setVaultPath, ensureVaultStructure } from '@/lib/obsidian';
 import { scanLocalAgents } from '@/lib/agents';
+import { BRIDGE_PORT } from '@/lib/config';
 
 export async function GET() {
   const vaultPath = getVaultPath();
@@ -14,7 +15,7 @@ export async function GET() {
     vaultAgenticOsDir: root,
     liveAgentsCount: liveCount,
     totalAgentsCount: agents.length,
-    bridgePort: 3141,
+    bridgePort: BRIDGE_PORT,
   });
 }
 

@@ -170,6 +170,25 @@ class AssistantDatabase {
                 created_at      INTEGER NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_suggestions_agent ON suggestions(agent_id, created_at DESC);
+
+            -- 11. War Room agent voice assignments (persisted across restarts)
+            CREATE TABLE IF NOT EXISTS agent_voices (
+                agent_id    TEXT PRIMARY KEY,
+                voice       TEXT NOT NULL,
+                updated_at  INTEGER NOT NULL
+            );
+
+            -- 12. Live meeting sessions (persisted across restarts)
+            CREATE TABLE IF NOT EXISTS live_meetings (
+                id          TEXT PRIMARY KEY,
+                agent_id    TEXT NOT NULL,
+                provider    TEXT NOT NULL DEFAULT '',
+                meet_url    TEXT NOT NULL DEFAULT '',
+                topic       TEXT NOT NULL DEFAULT '',
+                payload     TEXT,
+                created_at  INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_meetings_time ON live_meetings(created_at DESC);
         `);
     }
 
@@ -522,6 +541,103 @@ class AssistantDatabase {
             return this.db.prepare('SELECT * FROM suggestions ORDER BY created_at DESC').all();
         }
         return this.db.prepare('SELECT * FROM suggestions WHERE dismissed_at IS NULL ORDER BY created_at DESC').all();
+    }
+
+    // --- War Room Voices (persisted; previously in-memory only) ---
+    getAgentVoices() {
+        try {
+            const rows = this.db.prepare('SELECT agent_id, voice FROM agent_voices').all() || [];
+            const out = {};
+            for (const row of rows) out[row.agent_id] = row.voice;
+            return out;
+        } catch (err) {
+            console.warn('[Database] getAgentVoices failed:', err.message);
+            return {};
+        }
+    }
+
+    setAgentVoices(voices = {}) {
+        const now = Date.now();
+        const stmt = this.db.prepare(`
+            INSERT INTO agent_voices (agent_id, voice, updated_at) VALUES (?, ?, ?)
+            ON CONFLICT(agent_id) DO UPDATE SET voice = excluded.voice, updated_at = excluded.updated_at
+        `);
+        for (const [agentId, voice] of Object.entries(voices)) {
+            if (!agentId || !voice) continue;
+            try { stmt.run(String(agentId), String(voice), now); } catch (err) {
+                console.warn(`[Database] setAgentVoices(${agentId}) failed: ${err.message}`);
+            }
+        }
+        return this.getAgentVoices();
+    }
+
+    // --- Live Meeting Sessions (persisted; previously in-memory only) ---
+    getMeetingSessions(limit = 50) {
+        try {
+            const rows = this.db.prepare(
+                'SELECT * FROM live_meetings ORDER BY created_at DESC LIMIT ?'
+            ).all(limit) || [];
+            return rows.map((row) => {
+                let extra = {};
+                try { extra = row.payload ? JSON.parse(row.payload) : {}; } catch (e) {}
+                return {
+                    ...extra,
+                    id: row.id,
+                    agentId: row.agent_id,
+                    provider: row.provider,
+                    meetUrl: row.meet_url,
+                    topic: row.topic,
+                    createdAt: row.created_at,
+                };
+            });
+        } catch (err) {
+            console.warn('[Database] getMeetingSessions failed:', err.message);
+            return [];
+        }
+    }
+
+    addMeetingSession(session = {}) {
+        const id = session.id || `meet_${Date.now()}`;
+        const { id: _i, agentId: _a, provider: _p, meetUrl: _m, topic: _t, createdAt: _c, ...extra } = session;
+        try {
+            this.db.prepare(`
+                INSERT INTO live_meetings (id, agent_id, provider, meet_url, topic, payload, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    agent_id = excluded.agent_id, provider = excluded.provider,
+                    meet_url = excluded.meet_url, topic = excluded.topic, payload = excluded.payload
+            `).run(
+                id,
+                String(session.agentId || 'system'),
+                String(session.provider || ''),
+                String(session.meetUrl || ''),
+                String(session.topic || ''),
+                JSON.stringify(extra),
+                Number(session.createdAt) || Date.now()
+            );
+        } catch (err) {
+            console.warn('[Database] addMeetingSession failed:', err.message);
+        }
+        return { ...session, id };
+    }
+
+    removeMeetingSession(id) {
+        try {
+            const row = this.db.prepare('SELECT * FROM live_meetings WHERE id = ?').get(id);
+            if (!row) return null;
+            this.db.prepare('DELETE FROM live_meetings WHERE id = ?').run(id);
+            return { id: row.id, agentId: row.agent_id, provider: row.provider, meetUrl: row.meet_url, topic: row.topic };
+        } catch (err) {
+            console.warn('[Database] removeMeetingSession failed:', err.message);
+            return null;
+        }
+    }
+
+    clearMeetingSessions() {
+        try { this.db.prepare('DELETE FROM live_meetings').run(); } catch (err) {
+            console.warn('[Database] clearMeetingSessions failed:', err.message);
+        }
+        return true;
     }
 
     dismissSuggestion(id) {

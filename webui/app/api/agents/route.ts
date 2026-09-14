@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { scanLocalAgents } from '@/lib/agents';
+import { bridgeUrl } from '@/lib/config';
 
 export const dynamic = 'force-dynamic';
 
@@ -11,7 +12,7 @@ export async function GET() {
     try {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 2000);
-      const res = await fetch('http://localhost:3141/api/agents?token=earlyaidopters', {
+      const res = await fetch(bridgeUrl('/api/agents'), {
         signal: controller.signal,
         cache: 'no-store',
       });

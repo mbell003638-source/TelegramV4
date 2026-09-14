@@ -25,6 +25,7 @@ import {
   MousePointer
 } from 'lucide-react';
 import ReactiveOrb from '@/components/ReactiveOrb';
+import { bridgeUrl } from '@/lib/config';
 
 interface DeviceItem {
   serial: string;
@@ -58,7 +59,7 @@ export default function DevicesHubPage() {
 
   const fetchDeviceData = async () => {
     try {
-      const res = await fetch('http://localhost:3141/api/devices?token=earlyaidopters');
+      const res = await fetch(bridgeUrl('/api/devices'));
       if (res.ok) {
         const data = await res.json();
         setAdbInstalled(data.adbInstalled);
@@ -80,8 +81,7 @@ export default function DevicesHubPage() {
     if (!adbInstalled) return;
     setLoadingScreenshot(true);
     try {
-      const targetParam = selectedSerial ? `&serial=${encodeURIComponent(selectedSerial)}` : '';
-      const res = await fetch(`http://localhost:3141/api/devices/screenshot?token=earlyaidopters${targetParam}`);
+      const res = await fetch(bridgeUrl('/api/devices/screenshot', selectedSerial ? { serial: selectedSerial } : undefined));
       if (res.ok) {
         const data = await res.json();
         if (data.screenshot) {
@@ -118,7 +118,7 @@ export default function DevicesHubPage() {
     setOrbState('device_action');
     setStatusMessage(`Executing ${payload.action}...`);
     try {
-      const res = await fetch('http://localhost:3141/api/devices/action?token=earlyaidopters', {
+      const res = await fetch(bridgeUrl('/api/devices/action'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

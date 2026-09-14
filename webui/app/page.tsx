@@ -41,6 +41,7 @@ import {
 import VoiceButton from '@/components/VoiceButton';
 import { AgentInfo } from '@/lib/types';
 import { KanbanTask, SafetySwitchesState } from '@/lib/obsidian';
+import { BRIDGE_PORT } from '@/lib/config';
 
 export default function MissionControlHome() {
   const [activeTab, setActiveTab] = useState<'radar' | 'kanban' | 'warroom' | 'audit' | 'providers'>('radar');
@@ -890,7 +891,7 @@ export default function MissionControlHome() {
                 <Radio className="w-4 h-4 text-emerald-400" />
               </div>
               <div className="text-2xl font-black text-emerald-400 font-mono">
-                Port 3141
+                Port {BRIDGE_PORT}
               </div>
               <div className="text-[10px] text-emerald-400 mt-2 font-mono">
                 Zero-Telegram conflict isolated

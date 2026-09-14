@@ -17,9 +17,10 @@ const path = require('path');
 const KillSwitches = require('./KillSwitches');
 const ExfiltrationGuard = require('./ExfiltrationGuard');
 const { getDeviceAutomation } = require('./DeviceAutomation');
+const { handleRouterRoutes } = require('./RouterRoutes');
 
 class MissionControlServer {
-    constructor({ database, sessionStore, actionExecutor, agents, port = 3141, token = null }) {
+    constructor({ database, sessionStore, actionExecutor, agents, port = 3141, token = null, providerRouter = null, providerRegistry = null, agentOverrides = null }) {
         this.db = database;
         this.sessionStore = sessionStore;
         this.actionExecutor = actionExecutor;
@@ -31,6 +32,13 @@ class MissionControlServer {
         this.killSwitches = new KillSwitches(path.join(__dirname, '..'));
         this.exfiltrationGuard = new ExfiltrationGuard(this.db);
         this.deviceAutomation = getDeviceAutomation();
+        this.providerRouter = providerRouter;
+        this.providerRegistry = providerRegistry;
+        this.agentOverrides = agentOverrides;
+        // Set by index.js when the WhatsApp Cloud API channel is configured.
+        this.whatsappWebhook = null;
+        // OmniRouter OpenAI-compatible surface (/v1/*), gated by its own master key.
+        this.routerHandler = providerRouter ? providerRouter.createHttpHandler() : null;
 
         // Listen for EventBus events to broadcast via SSE
         this._wireEvents();
@@ -142,6 +150,14 @@ class MissionControlServer {
     }
 
     async _handleRequest(req, res) {
+        // --- Pre-auth transports (each carries its own authentication) ---
+        // WhatsApp signs the RAW body, so its webhook must run before the
+        // dashboard token check and before any body parsing.
+        if (this.whatsappWebhook && this.whatsappWebhook(req, res)) return;
+
+        // OmniRouter: OpenAI-compatible /v1/* behind the single master key.
+        if (this.routerHandler && this.routerHandler(req, res)) return;
+
         // CORS preflight
         if (req.method === 'OPTIONS') {
             res.writeHead(204, {
@@ -823,6 +839,11 @@ class MissionControlServer {
                 }
             }
 
+            // 7d. OmniRouter gateway + per-agent provider override toggle
+
+            if (await handleRouterRoutes(this, req, res, pathname, query)) return;
+
+
             // 7c. Kill Switches (ClaudeClaw V3 Pack 02)
             if (pathname === '/api/killswitches') {
                 if (req.method === 'GET') {
@@ -918,13 +939,13 @@ class MissionControlServer {
                         pi: 'Puck (Playful)',
                         grok: 'Fenrir (Deep)',
                     };
-                    return this._sendJson(res, 200, { voices: this._warRoomVoices || defaultVoices });
+                    return this._sendJson(res, 200, { voices: { ...defaultVoices, ...this.db.getAgentVoices() } });
                 }
                 if (req.method === 'POST') {
                     const body = await this._readBody(req);
-                    this._warRoomVoices = Object.assign(this._warRoomVoices || {}, body.voices || {});
-                    this.broadcast('warroom.voices_updated', this._warRoomVoices);
-                    return this._sendJson(res, 200, { ok: true, voices: this._warRoomVoices });
+                    const saved = this.db.setAgentVoices(body.voices || {});
+                    this.broadcast('warroom.voices_updated', saved);
+                    return this._sendJson(res, 200, { ok: true, voices: saved });
                 }
             }
 
@@ -1012,10 +1033,10 @@ class MissionControlServer {
             // 9. Live Meetings Dispatch (Google Meet, Pika, Recall.ai, Daily.co)
             if (pathname === '/api/meetings') {
                 if (req.method === 'GET') {
-                    return this._sendJson(res, 200, { sessions: this._meetingSessions || [] });
+                    return this._sendJson(res, 200, { sessions: this.db.getMeetingSessions() });
                 }
                 if (req.method === 'DELETE') {
-                    this._meetingSessions = [];
+                    this.db.clearMeetingSessions();
                     this.broadcast('meeting.cleared', {});
                     return this._sendJson(res, 200, { ok: true, message: 'All meeting sessions cleared' });
                 }
@@ -1023,14 +1044,11 @@ class MissionControlServer {
 
             if (pathname.startsWith('/api/meetings/') && req.method === 'DELETE') {
                 const sessionId = pathname.slice('/api/meetings/'.length);
-                if (this._meetingSessions) {
-                    const idx = this._meetingSessions.findIndex(s => s.id === sessionId);
-                    if (idx !== -1) {
-                        const removed = this._meetingSessions.splice(idx, 1)[0];
-                        this.db.recordHiveMind(removed.agentId || 'system', 'live_meetings', 'meeting_ended', `Meeting link for ${removed.agentId} (${removed.provider}) was removed.`);
-                        this.broadcast('meeting.removed', { id: sessionId });
-                        return this._sendJson(res, 200, { ok: true, message: 'Meeting session removed' });
-                    }
+                const removed = this.db.removeMeetingSession(sessionId);
+                if (removed) {
+                    this.db.recordHiveMind(removed.agentId || 'system', 'live_meetings', 'meeting_ended', `Meeting link for ${removed.agentId} (${removed.provider}) was removed.`);
+                    this.broadcast('meeting.removed', { id: sessionId });
+                    return this._sendJson(res, 200, { ok: true, message: 'Meeting session removed' });
                 }
                 return this._sendJson(res, 404, { error: 'Session not found' });
             }
@@ -1124,8 +1142,7 @@ class MissionControlServer {
                     status: 'live',
                     createdAt: Date.now(),
                 };
-                this._meetingSessions = this._meetingSessions || [];
-                this._meetingSessions.unshift(session);
+                this.db.addMeetingSession(session);
                 this.db.recordHiveMind(session.agentId, 'live_meetings', 'meeting_active', `Agent ${session.agentId} live in ${session.provider} room: ${session.meetUrl}`);
                 this.broadcast('meeting.dispatched', session);
                 return this._sendJson(res, 200, { ok: true, session });

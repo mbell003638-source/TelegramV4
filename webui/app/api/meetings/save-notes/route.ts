@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { saveMeetingNotesToObsidian } from '@/lib/obsidian';
+import { bridgeUrl } from '@/lib/config';
 
 export async function POST(request: Request) {
   try {
@@ -13,7 +14,7 @@ export async function POST(request: Request) {
 
     // Also forward to telegram bridge if active
     try {
-      await fetch('http://127.0.0.1:3141/api/meetings/save-notes?token=earlyaidopters', {
+      await fetch(bridgeUrl('/api/meetings/save-notes'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ agentId, provider, meetUrl, notes })

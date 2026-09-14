@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Mic, MicOff, Volume2, VolumeX, X, Sparkles, Globe, Shield, Activity, Terminal } from 'lucide-react';
 import { useRouter } from 'next/navigation';
+import { bridgeUrl } from '@/lib/config';
 
 export default function JarvisAssistant() {
   const router = useRouter();
@@ -184,7 +185,7 @@ export default function JarvisAssistant() {
       setResponse(reply);
       speak(reply);
       // Dispatch standup to bridge
-      fetch('http://localhost:3141/api/warroom/standup?token=earlyaidopters', { method: 'POST' }).catch(() => {});
+      fetch(bridgeUrl('/api/warroom/standup'), { method: 'POST' }).catch(() => {});
       return;
     }
 

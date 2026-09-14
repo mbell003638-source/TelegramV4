@@ -103,10 +103,9 @@ class HermesAgent extends BaseAgent {
         if (effort) args.push('--reasoning', effort);
 
         const workspaceRoot = this.sessionStore.getWorkspaceCwd('hermes', chatId);
-        const env = {
-            ...process.env,
+        const env = this.getSpawnEnv({
             PATH: (os.homedir() + '/.local/bin:' + os.homedir() + '/.npm-global/bin:' + (process.env.PATH || ''))
-        };
+        });
 
         return new Promise((resolve) => {
             this.process = spawn(this.hermesPath, args, { cwd: workspaceRoot, env });

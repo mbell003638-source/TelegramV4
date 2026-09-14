@@ -118,7 +118,7 @@ class OpenClawAgent extends BaseAgent {
         if (effort) args.push('--thinking', effort);
 
         const workspaceRoot = this.sessionStore.getWorkspaceCwd('openclaw', chatId);
-        const env = { ...process.env, PATH: (os.homedir() + '/.npm-global/bin:' + (process.env.PATH || '')) };
+        const env = this.getSpawnEnv({ PATH: (os.homedir() + '/.npm-global/bin:' + (process.env.PATH || '')) });
 
         return new Promise((resolve) => {
             this.process = spawn(this.openclawPath, args, { cwd: workspaceRoot, env });

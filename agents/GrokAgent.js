@@ -203,11 +203,10 @@ class GrokAgent extends BaseAgent {
             path.join(os.homedir(), '.grok', 'bin'),
             path.join(os.homedir(), '.npm-global', 'bin'),
         ];
-        const env = {
-            ...process.env,
+        const env = this.getSpawnEnv({
             CI: 'true',
             PATH: [...extraDirs, currentPath].join(pathSep)
-        };
+        });
 
         const useShell = isWin && (this.grokPath.endsWith('.cmd') || this.grokPath.endsWith('.bat'));
 

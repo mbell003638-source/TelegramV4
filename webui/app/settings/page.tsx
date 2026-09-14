@@ -17,6 +17,7 @@ import {
   Server
 } from 'lucide-react';
 import { AgentInfo } from '@/lib/types';
+import { BRIDGE_TOKEN, BRIDGE_PORT, bridgeUrl } from '@/lib/config';
 
 export default function SettingsPage() {
   const [vaultPath, setVaultPath] = useState('');
@@ -52,7 +53,7 @@ export default function SettingsPage() {
 
   const checkBridge = async () => {
     try {
-      const res = await fetch('http://localhost:3141/api/warroom/voices?token=earlyaidopters', {
+      const res = await fetch(bridgeUrl('/api/warroom/voices'), {
         method: 'GET',
         headers: { 'Content-Type': 'application/json' },
       });
@@ -264,18 +265,18 @@ export default function SettingsPage() {
                 : 'bg-amber-950 text-amber-400 border-amber-800'
             }`}
           >
-            {bridgeOnline ? 'BRIDGE ACTIVE (PORT 3141)' : 'STANDALONE MODE ACTIVE'}
+            {bridgeOnline ? `BRIDGE ACTIVE (PORT ${BRIDGE_PORT})` : 'STANDALONE MODE ACTIVE'}
           </span>
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 text-xs font-mono">
           <div className="p-3 rounded-xl bg-[#030612] border border-blue-950 space-y-1">
             <span className="text-gray-500 block">Bridge HTTP Port:</span>
-            <span className="text-white font-bold">3141</span>
+            <span className="text-white font-bold">{BRIDGE_PORT}</span>
           </div>
           <div className="p-3 rounded-xl bg-[#030612] border border-blue-950 space-y-1">
             <span className="text-gray-500 block">Access Token:</span>
-            <span className="text-sky-300">earlyaidopters</span>
+            <span className="text-sky-300">{BRIDGE_TOKEN}</span>
           </div>
           <div className="p-3 rounded-xl bg-[#030612] border border-blue-950 space-y-1">
             <span className="text-gray-500 block">Telegram Poller Safety:</span>
@@ -286,12 +287,12 @@ export default function SettingsPage() {
         <div className="p-4 rounded-xl bg-[#02050f] border border-blue-950/60 flex items-center justify-between text-xs text-gray-400">
           <span>Mission Control Dashboard URL:</span>
           <a
-            href="http://localhost:3141/?token=earlyaidopters"
+            href={bridgeUrl('/')}
             target="_blank"
             rel="noreferrer"
             className="text-sky-400 hover:text-sky-300 flex items-center gap-1 font-mono"
           >
-            <span>http://localhost:3141/?token=earlyaidopters</span>
+            <span>{bridgeUrl('/')}</span>
             <ExternalLink className="w-3.5 h-3.5" />
           </a>
         </div>

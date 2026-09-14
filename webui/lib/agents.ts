@@ -1,5 +1,6 @@
 import { AgentInfo } from './types';
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 import { execSync } from 'child_process';
 
@@ -153,7 +154,7 @@ function checkCommandInPath(cmd: string): string | null {
 }
 
 export function scanLocalAgents(): AgentInfo[] {
-  const userProfile = process.env.USERPROFILE || 'C:\\Users\\just2';
+  const userProfile = process.env.USERPROFILE || os.homedir();
   const localAppData = process.env.LOCALAPPDATA || path.join(userProfile, 'AppData', 'Local');
   const appData = process.env.APPDATA || path.join(userProfile, 'AppData', 'Roaming');
 

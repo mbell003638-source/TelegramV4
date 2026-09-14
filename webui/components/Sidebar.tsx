@@ -31,7 +31,7 @@ const INITIAL_AGENTS: AgentInfo[] = [
     status: 'live',
     description: 'Anthropic Claude Code CLI subprocess with autonomous tool execution.',
     category: 'core',
-    binaryPath: 'C:\\Users\\just2\\.local\\bin\\claude.exe'
+    binaryPath: null
   },
   {
     id: 'codex',
@@ -43,7 +43,7 @@ const INITIAL_AGENTS: AgentInfo[] = [
     status: 'live',
     description: 'High-speed coding execution engine with full filesystem access.',
     category: 'coding',
-    binaryPath: 'C:\\Users\\just2\\AppData\\Local\\Programs\\OpenAI\\Codex\\bin\\codex.exe'
+    binaryPath: null
   },
   {
     id: 'antigravity',
@@ -55,7 +55,7 @@ const INITIAL_AGENTS: AgentInfo[] = [
     status: 'live',
     description: 'Google Deepmind Advanced Agentic Coding engine.',
     category: 'router',
-    binaryPath: 'C:\\Users\\just2\\AppData\\Local\\agy\\bin\\agy.exe'
+    binaryPath: null
   },
   {
     id: 'grok',
@@ -67,7 +67,7 @@ const INITIAL_AGENTS: AgentInfo[] = [
     status: 'live',
     description: 'xAI Grok terminal intelligence with real-time web telemetry.',
     category: 'core',
-    binaryPath: 'C:\\Users\\just2\\.grok\\bin\\grok.exe'
+    binaryPath: null
   },
   {
     id: 'hermes',
@@ -79,7 +79,7 @@ const INITIAL_AGENTS: AgentInfo[] = [
     status: 'live',
     description: 'Nous Research Hermes agent with scratchpad and function call synthesis.',
     category: 'core',
-    binaryPath: 'C:\\Users\\just2\\AppData\\Local\\hermes\\bin\\hermes.exe'
+    binaryPath: null
   },
   {
     id: 'opencode',
@@ -91,7 +91,7 @@ const INITIAL_AGENTS: AgentInfo[] = [
     status: 'live',
     description: 'OpenCode terminal engine supporting OpenRouter, DeepSeek, and Anthropic.',
     category: 'coding',
-    binaryPath: 'C:\\Users\\just2\\AppData\\Roaming\\npm\\opencode'
+    binaryPath: null
   },
   {
     id: 'openclaw',

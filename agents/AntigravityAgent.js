@@ -169,7 +169,7 @@ class AntigravityAgent extends BaseAgent {
         }
 
         const workspaceRoot = this.sessionStore.getWorkspaceCwd('antigravity', chatId);
-        const env = { ...process.env, CI: 'true' };
+        const env = this.getSpawnEnv({ CI: 'true' });
 
         return new Promise((resolve) => {
             this.process = spawn(this.agyPath, args, { cwd: workspaceRoot, env });

@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { GoalItem, JournalEntry } from './types';
+import { OBSIDIAN_VAULT } from './config.server';
 
 const CONFIG_FILE = path.join(process.cwd(), 'obsidian-config.json');
 
@@ -11,7 +12,7 @@ export function getVaultPath(): string {
       if (data.vaultPath) return data.vaultPath;
     }
   } catch {}
-  return path.join(process.env.USERPROFILE || 'C:\\Users\\just2', 'Documents', 'ObsidianVault');
+  return OBSIDIAN_VAULT;
 }
 
 export function setVaultPath(newPath: string): boolean {

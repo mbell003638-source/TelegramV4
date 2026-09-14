@@ -100,6 +100,10 @@ const ActionExecutor = require('./core/ActionExecutor');
 const SessionStore = require('./core/SessionStore');
 const { getDatabase } = require('./core/Database');
 const MissionControlServer = require('./core/MissionControl');
+const ProviderRegistry = require('./core/ProviderRegistry');
+const ProviderRouter = require('./core/ProviderRouter');
+const { getAgentOverrides } = require('./core/AgentOverrides');
+const WhatsAppGateway = require('./core/WhatsAppGateway');
 
 // Agent implementations
 const AntigravityAgent = require('./agents/AntigravityAgent');
@@ -163,6 +167,15 @@ async function main() {
     // 4. Create Gateway and wire messageHandler
     // 4. Initialize unified SQLite database & start Mission Control Dashboard
     const database = getDatabase(path.join(config.baseDir, 'store'));
+    // 4b. OmniRouter — one master key in front of every configured provider
+    //     (OpenRouter catalog/accounting + OmniRoute failover + 9router key pools)
+    const providerRegistry = new ProviderRegistry(config.baseDir);
+    const providerRouter = new ProviderRouter({
+        registry: providerRegistry,
+        strategy: process.env.OMNIROUTER_STRATEGY || 'priority',
+    });
+    const agentOverrides = getAgentOverrides(config.baseDir);
+
     const dashboardPort = Number(process.env.DASHBOARD_PORT) || 3141;
     const dashboardToken = process.env.DASHBOARD_TOKEN || 'admin';
     const missionControl = new MissionControlServer({
@@ -172,6 +185,9 @@ async function main() {
         agents,
         port: dashboardPort,
         token: dashboardToken,
+        providerRouter,
+        providerRegistry,
+        agentOverrides,
     });
     await missionControl.start().catch((err) => {
         console.warn(`[MissionControl] Could not bind port ${dashboardPort}: ${err.message}`);
@@ -197,6 +213,35 @@ async function main() {
         console.log('ℹ️ Running in Web Mission Control standalone mode (no Telegram token configured).');
     }
 
+    // 5b. Optional WhatsApp Cloud API Gateway (webhook rides on Mission Control)
+
+    let whatsapp = null;
+
+    if (process.env.DISABLE_WHATSAPP !== 'true') {
+
+        whatsapp = WhatsAppGateway.fromEnv({
+
+            messageHandler: actionExecutor.getMessageHandler(),
+
+            uploadsDir: path.join(config.baseDir, 'uploads'),
+
+        });
+
+        if (whatsapp && await whatsapp.start()) {
+
+            missionControl.whatsappWebhook = whatsapp.createWebhookHandler();
+
+            console.log(`📱 WhatsApp Gateway online at ${whatsapp.webhookPath}`);
+
+        } else {
+
+            whatsapp = null;
+
+        }
+
+    }
+
+
     console.log('✅ System Online. Architecture:');
     console.log(`   Mission Control Web UI: http://localhost:${dashboardPort}/?token=${dashboardToken}`);
     if (gateway) {
@@ -206,6 +251,12 @@ async function main() {
     }
     console.log(`   Registered agents: ${Object.keys(agents).join(', ')}`);
     console.log(`   Active agent: ${sessionStore.getActiveAgent()}`);
+    const enabledProviders = providerRegistry.getAll().filter(p => p.enabled).map(p => p.id);
+    console.log(`   OmniRouter: ${enabledProviders.length ? enabledProviders.join(', ') : 'no providers configured yet'}`);
+    console.log(`   OpenAI-compatible endpoint: http://localhost:${dashboardPort}/v1  (key via /api/router/key)`);
+    const activeOverrides = Object.entries(agentOverrides.describeAll()).filter(([, v]) => v.enabled).map(([k]) => k);
+    if (activeOverrides.length) console.log(`   Provider overrides active: ${activeOverrides.join(', ')}`);
+    if (whatsapp) console.log('   Channels: Telegram + WhatsApp + Web');
 }
 
 main().catch((err) => {

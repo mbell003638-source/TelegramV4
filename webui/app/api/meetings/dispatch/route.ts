@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { addMeetingSession, MeetingSession } from '@/lib/meetings';
+import { bridgeUrl } from '@/lib/config';
 
 export async function POST(request: Request) {
   try {
@@ -44,9 +45,9 @@ export async function POST(request: Request) {
     // 2. Persist in local WebUI store
     addMeetingSession(session);
 
-    // 3. Forward to backend bridge on port 3141 if available
+    // 3. Forward to the backend bridge if available
     try {
-      await fetch('http://127.0.0.1:3141/api/meetings/dispatch?token=earlyaidopters', {
+      await fetch(bridgeUrl('/api/meetings/dispatch'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

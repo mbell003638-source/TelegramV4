@@ -114,7 +114,7 @@ class ClaudeAgent extends BaseAgent {
         if (sessionId) args.push('--resume', sessionId);
         this.stdinProc = spawn(bin, args, {
             cwd,
-            env: { ...process.env, CI: 'true' },
+            env: this.getSpawnEnv({ CI: 'true' }),
             stdio: ['pipe', 'pipe', 'pipe'],
         });
         this.process = this.stdinProc;
@@ -243,7 +243,7 @@ class ClaudeAgent extends BaseAgent {
         }
 
         const workspaceRoot = this.sessionStore.getWorkspaceCwd('claude', chatId);
-        const env = { ...process.env, CI: 'true' };
+        const env = this.getSpawnEnv({ CI: 'true' });
 
         return new Promise((resolve) => {
             const spawnCmd = isWin ? 'cmd.exe' : bin;

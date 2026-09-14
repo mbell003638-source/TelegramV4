@@ -78,7 +78,7 @@ function normalizeCodexModels(models, source = 'app-server', homeDir = os.homedi
 function queryCodexAppServer(codexPath, timeoutMs = 12000) {
     return new Promise((resolve, reject) => {
         const child = spawn(codexPath, ['app-server', '--stdio'], {
-            cwd: os.homedir(), env: { ...process.env, CI: 'true' }, stdio: ['pipe', 'pipe', 'pipe'],
+            cwd: os.homedir(), env: this.getSpawnEnv({ CI: 'true' }), stdio: ['pipe', 'pipe', 'pipe'],
         });
         let buffer = '';
         let stderr = '';
@@ -294,7 +294,7 @@ class CodexAgent extends BaseAgent {
         }
 
         const workspaceRoot = this.sessionStore.getWorkspaceCwd('codex', chatId);
-        const env = { ...process.env, CI: 'true' };
+        const env = this.getSpawnEnv({ CI: 'true' });
 
         return new Promise((resolve) => {
             const spawnCmd = (isWin && bin.endsWith('.cmd')) ? 'cmd.exe' : bin;

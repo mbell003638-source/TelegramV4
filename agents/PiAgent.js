@@ -164,11 +164,10 @@ class PiAgent extends BaseAgent {
 
         const isWin = process.platform === 'win32';
         const workspaceRoot = this.sessionStore.getWorkspaceCwd('pi', chatId);
-        const env = {
-            ...process.env,
+        const env = this.getSpawnEnv({
             CI: 'true',
             PATH: (os.homedir() + '/.npm-global/bin:' + os.homedir() + '/.local/bin:' + (process.env.PATH || ''))
-        };
+        });
 
         let execBinary = this.piPath;
         let execArgs = args;

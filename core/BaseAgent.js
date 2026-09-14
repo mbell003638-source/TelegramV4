@@ -4,6 +4,8 @@
 //  Defines the core agent lifecycle state machine:
 //    created → initializing → ready → starting → running → stopping → stopped
 //  And abstract methods: onInitialize, onStart, onStop, sendMessage, editMessage
+//  Also provides getSpawnEnv() — the per-agent provider override overlay that
+//  subclasses merge into their CLI subprocess env (see core/AgentOverrides.js).
 // =============================================================================
 const { channelEventBus } = require('./EventBus');
 
@@ -21,6 +23,35 @@ class BaseAgent {
 
     get status() { return this._status; }
     get isWarm() { return this._status === 'running'; }
+
+    /** Is this agent's provider override toggle currently on? */
+    get overrideActive() {
+        try {
+            const { getAgentOverrides } = require('./AgentOverrides');
+            return getAgentOverrides().isEnabled(this.key);
+        } catch (err) {
+            console.warn(`[BaseAgent] Failed to read override state for ${this.key}:`, err.message);
+            return false;
+        }
+    }
+
+    /**
+     * Build the env for a spawned CLI subprocess.
+     * Merge order: process.env  ←  extra  ←  provider override overlay.
+     * The overlay is `{}` when the toggle is off, so the agent keeps exactly
+     * its default env. Never throws — falls back to `{ ...process.env, ...extra }`.
+     */
+    getSpawnEnv(extra = {}) {
+        const base = { ...process.env, ...(extra || {}) };
+        try {
+            const { getAgentOverrides } = require('./AgentOverrides');
+            const overlay = getAgentOverrides().getEnvOverlay(this.key);
+            return { ...base, ...overlay };
+        } catch (err) {
+            console.warn(`[BaseAgent] Failed to apply override overlay for ${this.key}:`, err.message);
+            return base;
+        }
+    }
 
     setStatus(status, error) {
         const old = this._status;

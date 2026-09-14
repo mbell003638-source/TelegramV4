@@ -3,6 +3,8 @@ import { appendChatToObsidian, saveSessionMessage } from '@/lib/obsidian';
 import { spawn } from 'child_process';
 import path from 'path';
 import fs from 'fs';
+import os from 'os';
+import { bridgeUrl } from '@/lib/config';
 
 export const dynamic = 'force-dynamic';
 
@@ -63,7 +65,7 @@ export async function POST(req: Request) {
     }
 
     const currentSessionId = sessionId || `session_${Date.now()}`;
-    const userProfile = process.env.USERPROFILE || 'C:\\Users\\just2';
+    const userProfile = process.env.USERPROFILE || os.homedir();
     const localAppData = process.env.LOCALAPPDATA || path.join(userProfile, 'AppData', 'Local');
 
     // 1. Log User Message to Obsidian (Daily log + Session store)
@@ -124,8 +126,7 @@ export async function POST(req: Request) {
     if (!reply) {
       engineSource = 'bridge';
       try {
-        const bridgeUrl = 'http://localhost:3141/api/chat/send?token=earlyaidopters';
-        const bridgeRes = await fetch(bridgeUrl, {
+        const bridgeRes = await fetch(bridgeUrl('/api/chat/send'), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ message, agentId, model, chatId: currentSessionId }),

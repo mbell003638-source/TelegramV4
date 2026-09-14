@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { bridgeUrl } from '@/lib/config';
 
 export async function POST(
   req: NextRequest,
@@ -15,7 +16,7 @@ export async function POST(
 
     // Forward to bridge backend
     try {
-      const bridgeRes = await fetch(`http://localhost:3141/api/agents/${agentId}/model?token=earlyaidopters`, {
+      const bridgeRes = await fetch(bridgeUrl(`/api/agents/${agentId}/model`), {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
