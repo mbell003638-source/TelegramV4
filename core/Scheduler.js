@@ -236,7 +236,7 @@ class Scheduler {
      */
     nextRun(expr, fromMs = null) {
         const parsed = typeof expr === 'string' ? this.parseCron(expr) : expr;
-        const startMs = Number.isFinite(Number(fromMs)) ? Number(fromMs) : this._now();
+        const startMs = (fromMs === null || fromMs === undefined || fromMs === '' || !Number.isFinite(Number(fromMs))) ? this._now() : Number(fromMs);
         const limitMs = startMs + SEARCH_HORIZON_MS;
 
         const candidate = new Date(startMs);
@@ -268,7 +268,7 @@ class Scheduler {
     /** Validate a cron expression, compute its first run, and persist the task. */
     scheduleTask({ id = null, chatId = '', agentId = 'main', prompt = '', schedule = '', status = 'active', from = null } = {}) {
         this.parseCron(schedule); // throws on malformed input
-        const base = Number.isFinite(Number(from)) ? Number(from) : this._now();
+        const base = (from === null || from === undefined || from === '' || !Number.isFinite(Number(from))) ? this._now() : Number(from);
         const next = this.nextRun(schedule, base);
         if (!next) throw new Error(`Cron expression "${schedule}" has no upcoming run`);
         return this.database.createScheduledTask({ id, chatId, agentId, prompt, schedule, nextRun: next, status });
@@ -285,7 +285,7 @@ class Scheduler {
      *                    started:string[], skippedRunning:string[]}>}
      */
     async tick(nowMs = null) {
-        const now = Number.isFinite(Number(nowMs)) ? Number(nowMs) : this._now();
+        const now = (nowMs === null || nowMs === undefined || nowMs === '' || !Number.isFinite(Number(nowMs))) ? this._now() : Number(nowMs);
         const summary = { skipped: false, reason: null, due: 0, started: [], skippedRunning: [] };
 
         if (this.killSwitches && typeof this.killSwitches.isEnabled === 'function') {
