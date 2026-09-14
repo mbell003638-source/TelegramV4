@@ -104,8 +104,8 @@ async function saveProviderSettings() {
 </script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
 <style>
-  body { background: #0f0f0f; color: #e0e0e0; -webkit-tap-highlight-color: transparent; }
-  .card { background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 12px; padding: 16px; margin-bottom: 12px; }
+  body { background: #000000; color: #e0e0e0; -webkit-tap-highlight-color: transparent; }
+  .card { background: #040817; border: 1px solid rgba(59, 130, 246, 0.22); border-radius: 14px; padding: 16px; margin-bottom: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.6); }
   .pill { display: inline-block; padding: 2px 10px; border-radius: 999px; font-size: 12px; font-weight: 600; }
   .pill-active { background: #064e3b; color: #6ee7b7; }
   .pill-running { background: #1e3a5f; color: #60a5fa; animation: pulse 2s ease-in-out infinite; }
@@ -303,6 +303,9 @@ async function saveProviderSettings() {
       <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
       Providers
     </button>
+    <a href="http://localhost:3000" target="_blank" style="background:linear-gradient(135deg,#2563eb,#0284c7);color:#fff;border:1px solid #38bdf8;border-radius:8px;padding:4px 12px;font-size:12px;font-weight:700;display:flex;align-items:center;gap:6px;text-decoration:none;box-shadow:0 0 16px rgba(37,99,235,0.5)">
+      🚀 Super AMOLED WebUI
+    </a>
     <span id="last-updated" class="text-xs text-gray-500"></span>
     <button id="refresh-btn" onclick="refreshAll()" class="text-gray-400 hover:text-white transition">
       <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
