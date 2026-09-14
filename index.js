@@ -107,6 +107,9 @@ const WhatsAppGateway = require('./core/WhatsAppGateway');
 const Scheduler = require('./core/Scheduler');
 const MemorySearch = require('./core/MemorySearch');
 const TaskPlanner = require('./core/TaskPlanner');
+const SelfImprovementEngine = require('./core/SelfImprovement');
+const UpstreamWatch = require('./core/UpstreamWatch');
+const { runImprovement, IMPROVE_AGENT_ID } = require('./core/RouterRoutes');
 
 // Agent implementations
 const AntigravityAgent = require('./agents/AntigravityAgent');
@@ -191,6 +194,16 @@ async function main() {
         database,
     });
 
+    // 4e. Self-improvement sweep + upstream update watcher. The watcher only
+    //     ever reads: it reports what landed in the reference projects, it
+    //     never merges anything, so adopting a change stays a human call.
+    const selfImprovement = new SelfImprovementEngine({
+        database,
+        sessionStore,
+        baseDir: config.baseDir,
+    });
+    const upstreamWatch = new UpstreamWatch({ baseDir: config.baseDir });
+
     const dashboardPort = Number(process.env.DASHBOARD_PORT) || 3141;
     const dashboardToken = process.env.DASHBOARD_TOKEN || 'admin';
     const missionControl = new MissionControlServer({
@@ -205,6 +218,8 @@ async function main() {
         agentOverrides,
         memorySearch,
         taskPlanner,
+        selfImprovement,
+        upstreamWatch,
     });
     await missionControl.start().catch((err) => {
         console.warn(`[MissionControl] Could not bind port ${dashboardPort}: ${err.message}`);
@@ -248,6 +263,18 @@ async function main() {
     // Attached after construction because the scheduler needs
     // missionControl's kill switches.
     missionControl.scheduler = scheduler;
+
+    // The improvement sweep is not an agent prompt, so it gets its own
+    // handler on the same cron machinery.
+    scheduler.registerTaskHandler(IMPROVE_AGENT_ID, async () => {
+        // acknowledge: the scheduled pass marks upstream heads as seen so
+        // the next run reports only what is newer than this one.
+        const report = await runImprovement(missionControl, { acknowledge: true });
+        const learned = report.learning?.promotedRules?.length || 0;
+        const updated = report.upstream ? report.upstream.withUpdates : 0;
+        return `Learned ${learned} rule(s); ${updated} upstream project(s) have new commits.`
+            + (report.digest ? `\n${report.digest}` : '');
+    });
 
 
     // 5b. Optional WhatsApp Cloud API Gateway (webhook rides on Mission Control)

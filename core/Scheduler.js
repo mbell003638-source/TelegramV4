@@ -129,6 +129,9 @@ class Scheduler {
 
         this.timer = null;
         this.running = new Set();   // in-flight task ids — the overlap guard
+        // agent_id -> handler, for task kinds that are not agent prompts
+        // (the self-improvement sweep, upstream checks). registerTaskHandler().
+        this.handlers = new Map();
         this.inFlight = new Map();  // task id -> settled-when-done promise
     }
 
@@ -396,7 +399,22 @@ class Scheduler {
         return Promise.race([run, timeout]).finally(() => clearTimeout(timer));
     }
 
+    /**
+     * Route tasks carrying this agent_id to `handler` instead of sending
+     * their prompt to an agent. Lets non-prompt task kinds (maintenance
+     * sweeps, upstream update checks) ride the same cron machinery.
+     */
+    registerTaskHandler(agentId, handler) {
+        if (!agentId || typeof handler !== 'function') {
+            throw new Error('[Scheduler] registerTaskHandler(agentId, handler) requires both');
+        }
+        this.handlers.set(String(agentId), handler);
+        return this;
+    }
+
     _execute(task) {
+        const handler = this.handlers.get(String(task.agent_id || ''));
+        if (handler) return handler(task);
         if (this.runner) return this.runner(task);
         return this._dispatchViaActionExecutor(task);
     }

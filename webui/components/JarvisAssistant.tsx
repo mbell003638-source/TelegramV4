@@ -20,6 +20,36 @@ export default function JarvisAssistant() {
   const recognitionRef = useRef<any>(null);
   const animIdRef = useRef<number | null>(null);
 
+  // --- Always-listening / wake word ---------------------------------------
+  const [alwaysOn, setAlwaysOn] = useState(false);
+  const [wakeWord, setWakeWord] = useState('jarvis');
+  const [awake, setAwake] = useState(false);
+
+  // Mirrored into refs because the long-lived recognition callbacks below are
+  // created once and would otherwise close over stale state.
+  const alwaysOnRef = useRef(false);
+  const wakeWordRef = useRef('jarvis');
+  const awakeRef = useRef(false);
+  const restartTimerRef = useRef<any>(null);
+  const restartCountRef = useRef(0);
+  const stoppingRef = useRef(false);
+
+  useEffect(() => { alwaysOnRef.current = alwaysOn; }, [alwaysOn]);
+  useEffect(() => { wakeWordRef.current = (wakeWord || 'jarvis').toLowerCase().trim(); }, [wakeWord]);
+  useEffect(() => { awakeRef.current = awake; }, [awake]);
+
+  // Restore the operator's preference.
+  useEffect(() => {
+    try {
+      const savedOn = localStorage.getItem('jarvis.alwaysOn');
+      const savedWord = localStorage.getItem('jarvis.wakeWord');
+      if (savedWord) setWakeWord(savedWord);
+      if (savedOn === '1') setAlwaysOn(true);
+    } catch {
+      // private window / storage blocked — fall back to defaults
+    }
+  }, []);
+
   // Initialize Web Speech Recognition
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -35,37 +65,132 @@ export default function JarvisAssistant() {
 
       rec.onstart = () => {
         setIsListening(true);
-        setStatusText('LISTENING...');
+        restartCountRef.current = 0;
+        setStatusText(
+          alwaysOnRef.current && !awakeRef.current
+            ? `WAITING FOR "${wakeWordRef.current.toUpperCase()}"`
+            : 'LISTENING...'
+        );
       };
 
       rec.onresult = (event: any) => {
         let interim = '';
         for (let i = event.resultIndex; i < event.results.length; ++i) {
-          if (event.results[i].isFinal) {
-            const finalTxt = event.results[i][0].transcript;
-            setTranscript(finalTxt);
-            handleVoiceCommand(finalTxt);
-          } else {
-            interim += event.results[i][0].transcript;
+          const text = event.results[i][0].transcript;
+
+          if (!event.results[i].isFinal) {
+            interim += text;
             setTranscript(interim);
+            continue;
+          }
+
+          // Push-to-talk, or already woken: the whole phrase is the command.
+          if (!alwaysOnRef.current || awakeRef.current) {
+            setTranscript(text);
+            setAwake(false);
+            awakeRef.current = false;
+            handleVoiceCommand(text);
+            continue;
+          }
+
+          // Always-listening and dormant: only act once the wake word lands.
+          const lower = text.toLowerCase();
+          const at = lower.indexOf(wakeWordRef.current);
+          if (at === -1) {
+            // Ambient speech — show it, but do not dispatch it anywhere.
+            setTranscript(text);
+            setStatusText(`WAITING FOR "${wakeWordRef.current.toUpperCase()}"`);
+            continue;
+          }
+
+          const after = text.slice(at + wakeWordRef.current.length).replace(/^[\s,.:;!?-]+/, '');
+          if (after) {
+            // "Jarvis, do X" arrived in one breath — run it now.
+            setTranscript(after);
+            handleVoiceCommand(after);
+          } else {
+            // Bare wake word — stay awake for the follow-up phrase.
+            setAwake(true);
+            awakeRef.current = true;
+            setTranscript('');
+            setStatusText('LISTENING...');
           }
         }
       };
 
       rec.onerror = (e: any) => {
-        console.warn('JARVIS Speech Recognition error:', e);
+        const err = e?.error;
+        // A silent window just ends the turn; in always-listening mode onend
+        // restarts it. Anything permission-related must stop the loop, or it
+        // would spin forever against a denied mic.
+        if (err === 'not-allowed' || err === 'service-not-allowed') {
+          alwaysOnRef.current = false;
+          setAlwaysOn(false);
+          setStatusText('MIC BLOCKED');
+        } else if (err !== 'no-speech' && err !== 'aborted') {
+          console.warn('JARVIS Speech Recognition error:', err || e);
+        }
         setIsListening(false);
-        setStatusText('READY');
       };
 
       rec.onend = () => {
         setIsListening(false);
-        setStatusText('READY');
+        if (!alwaysOnRef.current || stoppingRef.current) {
+          setStatusText('READY');
+          return;
+        }
+        // Browsers end recognition every few seconds, so always-listening means
+        // restarting it. Back off progressively so a hard failure cannot spin.
+        restartCountRef.current += 1;
+        const delay = Math.min(250 * restartCountRef.current, 5000);
+        if (restartCountRef.current > 20) {
+          setAlwaysOn(false);
+          setStatusText('LISTENING STOPPED');
+          return;
+        }
+        clearTimeout(restartTimerRef.current);
+        restartTimerRef.current = setTimeout(() => {
+          try {
+            rec.start();
+          } catch {
+            // start() throws if it is already running — harmless.
+          }
+        }, delay);
       };
 
       recognitionRef.current = rec;
     }
+
+    return () => {
+      stoppingRef.current = true;
+      clearTimeout(restartTimerRef.current);
+      try { recognitionRef.current?.stop(); } catch { /* not running */ }
+    };
   }, []);
+
+  // Start or stop the continuous loop when the toggle flips.
+  useEffect(() => {
+    try { localStorage.setItem('jarvis.alwaysOn', alwaysOn ? '1' : '0'); } catch { /* blocked */ }
+    const rec = recognitionRef.current;
+    if (!rec) return;
+
+    if (alwaysOn) {
+      stoppingRef.current = false;
+      restartCountRef.current = 0;
+      try { rec.start(); } catch { /* already running */ }
+    } else {
+      stoppingRef.current = true;
+      clearTimeout(restartTimerRef.current);
+      setAwake(false);
+      try { rec.stop(); } catch { /* not running */ }
+      // Allow a later restart once this stop has settled.
+      setTimeout(() => { stoppingRef.current = false; }, 300);
+    }
+  }, [alwaysOn]);
+
+  useEffect(() => {
+    try { localStorage.setItem('jarvis.wakeWord', wakeWord); } catch { /* blocked */ }
+  }, [wakeWord]);
 
   // Text-To-Speech function with British Voice
   const speak = (text: string) => {
@@ -154,6 +279,22 @@ export default function JarvisAssistant() {
   const toggleMic = () => {
     if (!recognitionRef.current) {
       alert('Web Speech API is not supported in this browser. Please use Chrome or Edge.');
+      return;
+    }
+
+    // While always-listening, stop() would just be undone by the restart loop.
+    // So the mic button means "wake now" — skip the wake word for this turn.
+    // Turning the loop off is the Always Listening toggle's job.
+    if (alwaysOn) {
+      window.speechSynthesis?.cancel();
+      setAwake(true);
+      awakeRef.current = true;
+      setStatusText('LISTENING...');
+      try {
+        recognitionRef.current.start();
+      } catch {
+        // Already running — it is listening, which is what we want.
+      }
       return;
     }
 
@@ -311,6 +452,52 @@ export default function JarvisAssistant() {
                 <span>Voice: {ttsEnabled ? 'ON' : 'MUTED'}</span>
               </button>
             </div>
+
+            {/* Always-Listening / Wake Word */}
+            <div className="flex items-center justify-center gap-2 mb-3 flex-wrap">
+              <button
+                onClick={() => setAlwaysOn((v) => !v)}
+                className={`px-3 py-2 rounded-xl border text-xs font-semibold flex items-center gap-2 transition-all ${
+                  alwaysOn
+                    ? 'bg-[#04122a] border-sky-400 text-sky-200 shadow-[0_0_16px_rgba(56,189,248,0.45)]'
+                    : 'bg-gray-900 border-gray-800 text-gray-500 hover:border-blue-900'
+                }`}
+                title={
+                  alwaysOn
+                    ? `Always listening — say "${wakeWord}" to wake me`
+                    : 'Listen continuously and wait for the wake word'
+                }
+              >
+                <span
+                  className={`w-2 h-2 rounded-full ${
+                    alwaysOn
+                      ? awake
+                        ? 'bg-rose-400 animate-pulse'
+                        : 'bg-sky-400 animate-pulse'
+                      : 'bg-gray-600'
+                  }`}
+                />
+                <span>Always Listening: {alwaysOn ? (awake ? 'AWAKE' : 'ARMED') : 'OFF'}</span>
+              </button>
+
+              <label className="flex items-center gap-1.5 text-[10px] text-gray-500 font-mono uppercase tracking-wider">
+                <span>Wake word</span>
+                <input
+                  value={wakeWord}
+                  onChange={(e) => setWakeWord(e.target.value)}
+                  spellCheck={false}
+                  className="w-24 bg-black border border-blue-950 rounded-lg px-2 py-1 text-sky-300
+                             text-xs font-semibold tracking-wide outline-none focus:border-sky-500"
+                />
+              </label>
+            </div>
+
+            {alwaysOn && (
+              <p className="text-[10px] text-center text-gray-600 font-mono mb-2">
+                Speech is processed by your browser. Nothing is sent anywhere until
+                &ldquo;{wakeWord}&rdquo; is heard.
+              </p>
+            )}
 
             {/* Suggested Voice Commands */}
             <div className="mt-4 pt-3 border-t border-blue-950/60">

@@ -14,6 +14,12 @@
 //    GET/POST/PATCH  /api/agents/override    — per-agent provider toggle
 // =============================================================================
 
+const UpstreamWatch = require('./UpstreamWatch');
+
+// Scheduled tasks carrying this agent_id are the self-improvement sweep, not an
+// agent prompt. index.js registers the matching handler on the Scheduler.
+const IMPROVE_AGENT_ID = '__improve__';
+
 /**
  * Handle an OmniRouter or agent-override route.
  *
@@ -316,7 +322,150 @@ async function handleRouterRoutes(ctx, req, res, pathname, query) {
         }
     }
 
+    // --- Self-improvement + upstream update check ---
+    //  One control: run the sweep now, or arm it to run on a cron.
+    //  The scheduled run rides the normal scheduler via a registered handler
+    //  keyed on the IMPROVE_AGENT_ID task marker.
+    if (pathname === '/api/improve') {
+        if (req.method === 'GET') {
+            const task = ctx.db.getScheduledTasks('')
+                .find((t) => t.agent_id === IMPROVE_AGENT_ID) || null;
+            ctx._sendJson(res, 200, {
+                // Armed only while the task exists AND is active, so a paused
+                // task never reads as enabled.
+                enabled: !!task && task.status === 'active',
+                schedule: task ? task.schedule : null,
+                nextRun: task ? task.next_run : null,
+                lastRun: task ? task.last_run : null,
+                lastResult: task ? task.last_result : null,
+                sources: ctx.upstreamWatch
+                    ? ctx.upstreamWatch.sources.map((s) => ({
+                        id: s.id,
+                        repo: s.repo,
+                        note: s.note,
+                        local: !!ctx.upstreamWatch.localClonePath(s),
+                    }))
+                    : [],
+            });
+            return true;
+        }
+
+        if (req.method === 'POST' || req.method === 'PATCH') {
+            const body = await ctx._readBody(req);
+
+            // 1. Run the sweep right now and return the report.
+            if (body.runNow) {
+                try {
+                    const report = await runImprovement(ctx, { acknowledge: !!body.acknowledge });
+                    ctx._sendJson(res, 200, { ok: true, ...report });
+                } catch (err) {
+                    ctx._sendJson(res, 500, { error: err.message });
+                }
+                return true;
+            }
+
+            // 2. Arm or disarm the recurring sweep.
+            if (!ctx.scheduler) {
+                ctx._sendJson(res, 503, { error: 'Scheduler not configured' });
+                return true;
+            }
+            const existing = ctx.db.getScheduledTasks('')
+                .find((t) => t.agent_id === IMPROVE_AGENT_ID) || null;
+
+            if (body.enabled) {
+                const schedule = body.schedule || '0 3 * * *'; // daily at 03:00
+                try {
+                    ctx.scheduler.parseCron(schedule);
+                } catch (err) {
+                    ctx._sendJson(res, 400, { error: err.message });
+                    return true;
+                }
+                // Replace rather than stack, so arming twice cannot leave two
+                // sweeps running against each other.
+                if (existing) ctx.db.deleteScheduledTask(existing.id);
+                const task = ctx.scheduler.scheduleTask({
+                    chatId: '',
+                    agentId: IMPROVE_AGENT_ID,
+                    prompt: 'Self-improvement sweep and upstream update check',
+                    schedule,
+                });
+                ctx.db.logAudit('improve', 'schedule', 'improve_armed', `Daily improvement armed (${schedule})`, false);
+                ctx.broadcast('improve.armed', { schedule, nextRun: task.next_run });
+                ctx._sendJson(res, 200, { ok: true, enabled: true, schedule, nextRun: task.next_run });
+                return true;
+            }
+
+            if (existing) ctx.db.deleteScheduledTask(existing.id);
+            ctx.db.logAudit('improve', 'schedule', 'improve_disarmed', 'Daily improvement disarmed', false);
+            ctx.broadcast('improve.disarmed', {});
+            ctx._sendJson(res, 200, { ok: true, enabled: false });
+            return true;
+        }
+    }
+
+    // --- Upstream check on its own, without the learning pass ---
+    if (pathname === '/api/upstream') {
+        if (!ctx.upstreamWatch) {
+            ctx._sendJson(res, 503, { error: 'Upstream watch not configured' });
+            return true;
+        }
+        if (req.method === 'GET') {
+            const result = await ctx.upstreamWatch.checkAll();
+            ctx._sendJson(res, 200, { ...result, digest: UpstreamWatch.formatDigest(result) });
+            return true;
+        }
+        if (req.method === 'POST') {
+            // Acknowledging marks the current heads as seen, so the next check
+            // reports only what is newer.
+            const body = await ctx._readBody(req);
+            const result = await ctx.upstreamWatch.checkAll();
+            const acked = body.acknowledge ? ctx.upstreamWatch.acknowledge(result.reports) : [];
+            ctx._sendJson(res, 200, { ...result, acknowledged: acked });
+            return true;
+        }
+    }
+
     return false;
 }
 
-module.exports = { handleRouterRoutes };
+/**
+ * The self-improvement sweep: learn from recent turns, then report what landed
+ * in the upstream projects this Agent OS draws its features from.
+ *
+ * Deliberately read-only with respect to upstream — it reports commits, it does
+ * not merge them. Adopting an upstream change stays a human decision.
+ */
+async function runImprovement(ctx, { acknowledge = false } = {}) {
+    const out = { learning: null, upstream: null, digest: null, errors: [] };
+
+    if (ctx.selfImprovement) {
+        try {
+            out.learning = await ctx.selfImprovement.evaluateAndLearn('');
+        } catch (err) {
+            out.errors.push(`learning: ${err.message}`);
+        }
+    }
+
+    if (ctx.upstreamWatch) {
+        try {
+            out.upstream = await ctx.upstreamWatch.checkAll();
+            out.digest = UpstreamWatch.formatDigest(out.upstream);
+            if (acknowledge) out.acknowledged = ctx.upstreamWatch.acknowledge(out.upstream.reports);
+        } catch (err) {
+            out.errors.push(`upstream: ${err.message}`);
+        }
+    }
+
+    try {
+        const insights = out.learning?.promotedRules?.length || 0;
+        ctx.db.recordHiveMind('system', 'improve', 'improvement_sweep',
+            `Self-improvement sweep: ${insights} rule(s) learned; `
+            + `${out.upstream ? out.upstream.withUpdates : 0}/${out.upstream ? out.upstream.total : 0} upstream project(s) have new commits.`);
+    } catch (err) {
+        out.errors.push(`record: ${err.message}`);
+    }
+
+    return out;
+}
+
+module.exports = { handleRouterRoutes, runImprovement, IMPROVE_AGENT_ID };

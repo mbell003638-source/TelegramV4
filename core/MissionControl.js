@@ -20,7 +20,7 @@ const { getDeviceAutomation } = require('./DeviceAutomation');
 const { handleRouterRoutes } = require('./RouterRoutes');
 
 class MissionControlServer {
-    constructor({ database, sessionStore, actionExecutor, agents, port = 3141, token = null, providerRouter = null, providerRegistry = null, agentOverrides = null, memorySearch = null, taskPlanner = null, scheduler = null }) {
+    constructor({ database, sessionStore, actionExecutor, agents, port = 3141, token = null, providerRouter = null, providerRegistry = null, agentOverrides = null, memorySearch = null, taskPlanner = null, scheduler = null, selfImprovement = null, upstreamWatch = null }) {
         this.db = database;
         this.sessionStore = sessionStore;
         this.actionExecutor = actionExecutor;
@@ -38,6 +38,8 @@ class MissionControlServer {
         this.memorySearch = memorySearch;
         this.taskPlanner = taskPlanner;
         this.scheduler = scheduler;
+        this.selfImprovement = selfImprovement;
+        this.upstreamWatch = upstreamWatch;
         // Set by index.js when the WhatsApp Cloud API channel is configured.
         this.whatsappWebhook = null;
         // OmniRouter OpenAI-compatible surface (/v1/*), gated by its own master key.
