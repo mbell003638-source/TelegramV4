@@ -414,6 +414,14 @@ class MissionControlServer {
                 });
             }
 
+            if (pathname === '/api/devices/remote' && req.method === 'GET') {
+                return this._sendJson(res, 200, {
+                    keys: this.deviceAutomation.getRemoteKeys(),
+                    tvApps: this.deviceAutomation.getTvApps(),
+                    phoneApps: this.deviceAutomation.getQuickApps(),
+                });
+            }
+
             if (pathname === '/api/devices/screenshot' && req.method === 'GET') {
                 try {
                     const serial = query.serial || null;
@@ -445,6 +453,24 @@ class MissionControlServer {
                             break;
                         case 'launch':
                             result = await this.deviceAutomation.launchApp(pkg, serial);
+                            break;
+                        case 'remote':
+                            // Named TV remote button (dpad/media/volume).
+                            result = await this.deviceAutomation.remoteKey(body.key, serial);
+                            break;
+                        case 'connect':
+                            // Android TV / Google TV are network devices.
+                            result = await this.deviceAutomation.connect(body.host, body.port);
+                            break;
+                        case 'disconnect':
+                            result = await this.deviceAutomation.disconnect(body.host, body.port);
+                            break;
+                        case 'pair':
+                            // Android 11+ wireless debugging 6-digit pairing.
+                            result = await this.deviceAutomation.pairWireless(body.host, body.pairingPort, body.code);
+                            break;
+                        case 'tcpip':
+                            result = await this.deviceAutomation.enableTcpip(body.port, serial);
                             break;
                         default:
                             return this._sendJson(res, 400, { ok: false, error: `Unknown action: ${action}` });
