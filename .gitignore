@@ -54,3 +54,7 @@ test/tmp_*
 # OS Artifacts
 .DS_Store
 Thumbs.db
+
+# Runtime state that can hold plaintext provider API keys — never commit.
+store/*.json
+!store/.gitkeep

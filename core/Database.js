@@ -398,6 +398,142 @@ class AssistantDatabase {
     }
 
     // =========================================================================
+    //  SCHEDULED TASKS (CRON)
+    // =========================================================================
+
+    createScheduledTask({ id = null, chatId = '', agentId = 'main', prompt = '', schedule = '', nextRun = null, status = 'active' } = {}) {
+        const taskId = id || `sched_${crypto.randomUUID().slice(0, 8)}`;
+        const now = Date.now();
+        try {
+            this.db.prepare(`
+                INSERT INTO scheduled_tasks (id, chat_id, agent_id, prompt, schedule, next_run, status, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    chat_id = excluded.chat_id, agent_id = excluded.agent_id,
+                    prompt = excluded.prompt, schedule = excluded.schedule,
+                    next_run = excluded.next_run, status = excluded.status
+            `).run(
+                taskId,
+                String(chatId ?? ''),
+                String(agentId || 'main'),
+                String(prompt || ''),
+                String(schedule || ''),
+                Number(nextRun) || now,
+                String(status || 'active'),
+                now
+            );
+        } catch (err) {
+            console.warn(`[Database] createScheduledTask(${taskId}) failed: ${err.message}`);
+            return null;
+        }
+        return this.getScheduledTask(taskId);
+    }
+
+    getScheduledTask(id) {
+        try {
+            const row = this.db.prepare('SELECT * FROM scheduled_tasks WHERE id = ?').get(id);
+            return row ? this._decorateScheduledTask(row) : null;
+        } catch (err) {
+            console.warn('[Database] getScheduledTask failed:', err.message);
+            return null;
+        }
+    }
+
+    getScheduledTasks(chatId) {
+        try {
+            const scoped = chatId !== undefined && chatId !== null && chatId !== '' && chatId !== 'all';
+            const rows = scoped
+                ? this.db.prepare('SELECT * FROM scheduled_tasks WHERE chat_id = ? ORDER BY next_run ASC').all(String(chatId))
+                : this.db.prepare('SELECT * FROM scheduled_tasks ORDER BY next_run ASC').all();
+            return (rows || []).map((row) => this._decorateScheduledTask(row));
+        } catch (err) {
+            console.warn('[Database] getScheduledTasks failed:', err.message);
+            return [];
+        }
+    }
+
+    getDueScheduledTasks(now = Date.now()) {
+        try {
+            const rows = this.db.prepare(`
+                SELECT * FROM scheduled_tasks
+                WHERE status = 'active' AND next_run <= ?
+                ORDER BY next_run ASC
+            `).all(Number(now) || Date.now());
+            return (rows || []).map((row) => this._decorateScheduledTask(row));
+        } catch (err) {
+            console.warn('[Database] getDueScheduledTasks failed:', err.message);
+            return [];
+        }
+    }
+
+    updateScheduledTaskRun(id, { nextRun, lastResult, lastRunAt, status } = {}) {
+        const sets = [];
+        const params = [];
+        if (nextRun !== undefined && nextRun !== null) {
+            sets.push('next_run = ?');
+            params.push(Number(nextRun));
+        }
+        if (lastResult !== undefined) {
+            sets.push('last_result = ?');
+            params.push(lastResult === null ? null : (typeof lastResult === 'string' ? lastResult : JSON.stringify(lastResult)));
+        }
+        if (lastRunAt !== undefined && lastRunAt !== null) {
+            sets.push('last_run = ?');
+            params.push(Number(lastRunAt));
+        }
+        if (status !== undefined && status !== null) {
+            sets.push('status = ?');
+            params.push(String(status));
+        }
+        if (sets.length === 0) return this.getScheduledTask(id);
+        try {
+            this.db.prepare(`UPDATE scheduled_tasks SET ${sets.join(', ')} WHERE id = ?`).run(...params, id);
+        } catch (err) {
+            console.warn(`[Database] updateScheduledTaskRun(${id}) failed: ${err.message}`);
+        }
+        return this.getScheduledTask(id);
+    }
+
+    setScheduledTaskStatus(id, status) {
+        try {
+            this.db.prepare('UPDATE scheduled_tasks SET status = ? WHERE id = ?').run(String(status || 'active'), id);
+        } catch (err) {
+            console.warn(`[Database] setScheduledTaskStatus(${id}) failed: ${err.message}`);
+        }
+        return this.getScheduledTask(id);
+    }
+
+    deleteScheduledTask(id) {
+        try {
+            const result = this.db.prepare('DELETE FROM scheduled_tasks WHERE id = ?').run(id);
+            return Number(result?.changes || 0) > 0;
+        } catch (err) {
+            console.warn(`[Database] deleteScheduledTask(${id}) failed: ${err.message}`);
+            return false;
+        }
+    }
+
+    // The dashboard task card (core/dashboardHtml.js) reads id / prompt / schedule /
+    // next_run / status / agent_id / last_result directly off the row, plus two
+    // derived fields: `last_status` (tick / cross / clock icon) and `started_at`
+    // (shown only while a run is in flight). Scheduler writes failures as
+    // "Error: ..." and timeouts as "Timed out ..." so the icon can be derived
+    // without widening the existing scheduled_tasks schema.
+    _decorateScheduledTask(row) {
+        const task = { ...row };
+        if (row.last_run) {
+            const result = String(row.last_result || '');
+            if (/^Timed out/i.test(result)) task.last_status = 'timeout';
+            else if (/^Error:/i.test(result)) task.last_status = 'failed';
+            else task.last_status = 'success';
+        } else {
+            task.last_status = null;
+        }
+        if (row.status === 'running' && row.last_run) task.started_at = row.last_run;
+        return task;
+    }
+
+    // =========================================================================
     //  CHAT PREFERENCES & CLI SESSIONS
     // =========================================================================
 

@@ -26,7 +26,7 @@ const MARKER_VAR = 'OMNIROUTER_ACTIVE';
 // Values are ALWAYS arrays (antigravity needs two api-key vars), so the UI can
 // introspect them uniformly. A role that is absent is not supported by that CLI.
 const AGENT_ENV_MAP = {
-    claude:      { baseUrl: ['ANTHROPIC_BASE_URL'], apiKey: ['ANTHROPIC_API_KEY'], model: ['ANTHROPIC_MODEL'] },
+    claude:      { baseUrl: ['ANTHROPIC_BASE_URL'], apiKey: ['ANTHROPIC_AUTH_TOKEN'], model: ['ANTHROPIC_MODEL'] },
     codex:       { baseUrl: ['OPENAI_BASE_URL'],    apiKey: ['OPENAI_API_KEY'],    model: ['OPENAI_MODEL'] },
     opencode:    { baseUrl: ['OPENAI_BASE_URL'],    apiKey: ['OPENAI_API_KEY'] },
     grok:        { baseUrl: ['XAI_BASE_URL'],       apiKey: ['XAI_API_KEY'],       model: ['GROK_MODEL'] },
@@ -37,6 +37,13 @@ const AGENT_ENV_MAP = {
 };
 
 const ROLES = ['baseUrl', 'apiKey', 'model'];
+
+// Fixed env vars set alongside an override, per agent. Claude Code >= 2.1.129
+// uses gateway discovery to pull GET /v1/models into its own /model picker,
+// so every routed model shows up inside the CLI once the toggle is on.
+const AGENT_ENV_CONSTANTS = {
+    claude: { CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY: '1' },
+};
 
 /** Repo-standard secret mask: first 7 + '...' + last 4. */
 function maskKey(key) {
@@ -107,6 +114,9 @@ class AgentOverrides {
                 if (!names.includes(name)) names.push(name);
             }
         }
+        for (const name of Object.keys(AGENT_ENV_CONSTANTS[agentKey] || {})) {
+            if (!names.includes(name)) names.push(name);
+        }
         return names;
     }
 
@@ -122,7 +132,12 @@ class AgentOverrides {
                 if (!names.includes(name)) names.push(name);
             }
         }
-        if (names.length) names.push(MARKER_VAR);
+        if (names.length) {
+            for (const name of Object.keys(AGENT_ENV_CONSTANTS[agentKey] || {})) {
+                if (!names.includes(name)) names.push(name);
+            }
+            names.push(MARKER_VAR);
+        }
         return names;
     }
 
@@ -240,7 +255,12 @@ class AgentOverrides {
                     overlay[name] = String(value);
                 }
             }
-            if (Object.keys(overlay).length) overlay[MARKER_VAR] = '1';
+            if (Object.keys(overlay).length) {
+                for (const [name, value] of Object.entries(AGENT_ENV_CONSTANTS[agentKey] || {})) {
+                    overlay[name] = String(value);
+                }
+                overlay[MARKER_VAR] = '1';
+            }
         } catch (err) {
             console.warn(`[AgentOverrides] Failed to build env overlay for ${agentKey}:`, err.message);
             return {};
@@ -300,6 +320,7 @@ module.exports = {
     getAgentOverrides,
     resetAgentOverrides,
     AGENT_ENV_MAP,
+    AGENT_ENV_CONSTANTS,
     maskKey,
     MARKER_VAR,
 };

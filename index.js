@@ -104,6 +104,9 @@ const ProviderRegistry = require('./core/ProviderRegistry');
 const ProviderRouter = require('./core/ProviderRouter');
 const { getAgentOverrides } = require('./core/AgentOverrides');
 const WhatsAppGateway = require('./core/WhatsAppGateway');
+const Scheduler = require('./core/Scheduler');
+const MemorySearch = require('./core/MemorySearch');
+const TaskPlanner = require('./core/TaskPlanner');
 
 // Agent implementations
 const AntigravityAgent = require('./agents/AntigravityAgent');
@@ -176,6 +179,18 @@ async function main() {
     });
     const agentOverrides = getAgentOverrides(config.baseDir);
 
+    // 4c. Searchable shared memory — any agent can recall what any other
+    //     agent learned, in any past session (FTS5, LIKE fallback).
+    const memorySearch = new MemorySearch({ database });
+
+    // 4d. Task planner: decompose a request, pick a model per subtask,
+    //     execute respecting dependencies, then synthesize one answer.
+    const taskPlanner = new TaskPlanner({
+        router: providerRouter,
+        agents,
+        database,
+    });
+
     const dashboardPort = Number(process.env.DASHBOARD_PORT) || 3141;
     const dashboardToken = process.env.DASHBOARD_TOKEN || 'admin';
     const missionControl = new MissionControlServer({
@@ -188,6 +203,8 @@ async function main() {
         providerRouter,
         providerRegistry,
         agentOverrides,
+        memorySearch,
+        taskPlanner,
     });
     await missionControl.start().catch((err) => {
         console.warn(`[MissionControl] Could not bind port ${dashboardPort}: ${err.message}`);
@@ -212,6 +229,23 @@ async function main() {
     } else {
         console.log('ℹ️ Running in Web Mission Control standalone mode (no Telegram token configured).');
     }
+
+    // 5a. Cron scheduler — executes due scheduled_tasks. Before this the
+
+    //     table and its UI existed but nothing ever ran a task.
+
+    const scheduler = new Scheduler({
+
+        database,
+
+        actionExecutor,
+
+        killSwitches: missionControl.killSwitches,
+
+    });
+
+    scheduler.start();
+
 
     // 5b. Optional WhatsApp Cloud API Gateway (webhook rides on Mission Control)
 
@@ -257,6 +291,16 @@ async function main() {
     const activeOverrides = Object.entries(agentOverrides.describeAll()).filter(([, v]) => v.enabled).map(([k]) => k);
     if (activeOverrides.length) console.log(`   Provider overrides active: ${activeOverrides.join(', ')}`);
     if (whatsapp) console.log('   Channels: Telegram + WhatsApp + Web');
+    console.log(`   Memory recall: ${memorySearch.stats().mode} (${memorySearch.stats().indexed} indexed)`);
+    console.log('   Scheduler: running');
+
+    // Stop the scheduler cleanly so an in-flight task is not orphaned.
+    for (const sig of ['SIGINT', 'SIGTERM']) {
+        process.on(sig, () => {
+            scheduler.stop().catch(() => {});
+            process.exit(0);
+        });
+    }
 }
 
 main().catch((err) => {

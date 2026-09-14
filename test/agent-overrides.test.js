@@ -9,6 +9,7 @@ const {
     getAgentOverrides,
     resetAgentOverrides,
     AGENT_ENV_MAP,
+    AGENT_ENV_CONSTANTS,
 } = require('../core/AgentOverrides');
 const BaseAgent = require('../core/BaseAgent');
 
@@ -52,8 +53,13 @@ test('toggle ON builds the mapped env overlay for claude, codex and grok', () =>
         ov.enable('claude', { providerId: 'omnirouter', model: 'claude-opus-4', baseUrl: 'https://router.local/v1', apiKey: RAW_KEY });
         const claude = ov.getEnvOverlay('claude');
         assert.equal(claude.ANTHROPIC_BASE_URL, 'https://router.local/v1');
-        assert.equal(claude.ANTHROPIC_API_KEY, RAW_KEY);
+        assert.equal(claude.ANTHROPIC_AUTH_TOKEN, RAW_KEY);
         assert.equal(claude.ANTHROPIC_MODEL, 'claude-opus-4');
+        // Claude Code pulls GET /v1/models into its own picker with this on.
+        assert.equal(claude.CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY, '1');
+        // ANTHROPIC_API_KEY maps to X-Api-Key; setting it alongside
+        // ANTHROPIC_AUTH_TOKEN is an auth conflict, so it must stay unset.
+        assert.equal('ANTHROPIC_API_KEY' in claude, false);
         assert.equal(claude.OMNIROUTER_ACTIVE, '1');
         assert.equal(ov.isEnabled('claude'), true);
 
@@ -78,7 +84,8 @@ test('toggle ON builds the mapped env overlay for claude, codex and grok', () =>
 
         // every overlay key must be declared in AGENT_ENV_MAP (plus the marker)
         for (const key of ['claude', 'codex', 'grok', 'antigravity']) {
-            const declared = Object.values(AGENT_ENV_MAP[key]).flat();
+            const declared = Object.values(AGENT_ENV_MAP[key]).flat()
+                .concat(Object.keys(AGENT_ENV_CONSTANTS[key] || {}));
             for (const name of Object.keys(ov.getEnvOverlay(key))) {
                 if (name === 'OMNIROUTER_ACTIVE') continue;
                 assert.ok(declared.includes(name), `${name} not declared for ${key}`);
@@ -115,7 +122,7 @@ test('toggle OFF yields an empty overlay', () => {
 
 test('lossless revert: unset stays unset, prior values are restored exactly', () => {
     const dir = tempBaseDir();
-    const restoreEnv = stashEnv(['ANTHROPIC_BASE_URL', 'ANTHROPIC_API_KEY', 'ANTHROPIC_MODEL', 'OMNIROUTER_ACTIVE']);
+    const restoreEnv = stashEnv(['ANTHROPIC_BASE_URL', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_MODEL', 'OMNIROUTER_ACTIVE']);
     try {
         resetAgentOverrides();
         const ov = getAgentOverrides(dir);
@@ -125,7 +132,7 @@ test('lossless revert: unset stays unset, prior values are restored exactly', ()
         delete process.env.ANTHROPIC_BASE_URL;
         delete process.env.OMNIROUTER_ACTIVE;
         process.env.ANTHROPIC_MODEL = 'prior-model';
-        process.env.ANTHROPIC_API_KEY = 'prior-key';
+        process.env.ANTHROPIC_AUTH_TOKEN = 'prior-key';
 
         ov.enable('claude', { providerId: 'omnirouter', model: 'router-model', baseUrl: 'https://router.local/v1', apiKey: RAW_KEY });
 
@@ -133,20 +140,20 @@ test('lossless revert: unset stays unset, prior values are restored exactly', ()
         const snapshot = ov.get('claude').snapshot;
         assert.equal(snapshot.ANTHROPIC_BASE_URL, null);
         assert.equal(snapshot.ANTHROPIC_MODEL, 'prior-model');
-        assert.equal(snapshot.ANTHROPIC_API_KEY, 'prior-key');
+        assert.equal(snapshot.ANTHROPIC_AUTH_TOKEN, 'prior-key');
         assert.equal(snapshot.OMNIROUTER_ACTIVE, null);
 
         const onEnv = agent.getSpawnEnv();
         assert.equal(onEnv.ANTHROPIC_BASE_URL, 'https://router.local/v1');
         assert.equal(onEnv.ANTHROPIC_MODEL, 'router-model');
-        assert.equal(onEnv.ANTHROPIC_API_KEY, RAW_KEY);
+        assert.equal(onEnv.ANTHROPIC_AUTH_TOKEN, RAW_KEY);
         assert.equal(onEnv.OMNIROUTER_ACTIVE, '1');
         assert.equal(agent.overrideActive, true);
 
         const result = ov.disable('claude');
         assert.equal(result.restored.ANTHROPIC_BASE_URL, null, 'null == revert to unset');
         assert.equal(result.restored.ANTHROPIC_MODEL, 'prior-model');
-        assert.equal(result.restored.ANTHROPIC_API_KEY, 'prior-key');
+        assert.equal(result.restored.ANTHROPIC_AUTH_TOKEN, 'prior-key');
 
         const offEnv = agent.getSpawnEnv();
         // Previously-unset var must be ABSENT, not an empty string.
@@ -155,7 +162,7 @@ test('lossless revert: unset stays unset, prior values are restored exactly', ()
         assert.equal('OMNIROUTER_ACTIVE' in offEnv, false);
         // Previously-set vars restored to exactly their prior values.
         assert.equal(offEnv.ANTHROPIC_MODEL, 'prior-model');
-        assert.equal(offEnv.ANTHROPIC_API_KEY, 'prior-key');
+        assert.equal(offEnv.ANTHROPIC_AUTH_TOKEN, 'prior-key');
         assert.equal(agent.overrideActive, false);
 
         // The overlay never touched the parent process env.

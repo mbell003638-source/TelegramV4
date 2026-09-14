@@ -184,6 +184,91 @@ async function handleRouterRoutes(ctx, req, res, pathname, query) {
         }
     }
 
+    // --- MASTER TOGGLE: wire every agent to the router in one switch ---
+    //  This is the headline control. ON re-points every toggleable agent at the
+    //  OmniRouter at once; OFF reverts each one to its own defaults, losslessly.
+    if (pathname === '/api/router/master') {
+        if (!ctx.agentOverrides) {
+            ctx._sendJson(res, 503, { error: 'Agent overrides not configured' });
+            return true;
+        }
+
+        const all = ctx.agentOverrides.describeAll();
+        const keys = Object.keys(all);
+
+        if (req.method === 'GET') {
+            const on = keys.filter((k) => all[k].enabled);
+            ctx._sendJson(res, 200, {
+                // 'on' only when every agent is wired, so the UI switch never
+                // claims a partial rollout is complete.
+                state: on.length === 0 ? 'off' : (on.length === keys.length ? 'on' : 'partial'),
+                enabledCount: on.length,
+                totalCount: keys.length,
+                enabled: on,
+                agents: all,
+            });
+            return true;
+        }
+
+        if (req.method === 'POST' || req.method === 'PATCH') {
+            const body = await ctx._readBody(req);
+            const turnOn = !!body.enabled;
+            const results = {};
+            const failed = {};
+
+            if (turnOn) {
+                const baseUrl = body.baseUrl || `http://127.0.0.1:${ctx.port}/v1`;
+                const apiKey = body.apiKey
+                    || (ctx.providerRouter ? ctx.providerRouter.getMasterKey() : null);
+                if (!apiKey) {
+                    ctx._sendJson(res, 400, { error: 'No apiKey supplied and router is unavailable' });
+                    return true;
+                }
+                for (const agentKey of keys) {
+                    try {
+                        results[agentKey] = ctx.agentOverrides.enable(agentKey, {
+                            providerId: body.providerId || 'omnirouter',
+                            // A per-agent model beats the one blanket model.
+                            model: (body.models && body.models[agentKey]) || body.model,
+                            baseUrl,
+                            apiKey,
+                        });
+                    } catch (err) {
+                        // One unsupported agent must not abort the whole sweep.
+                        failed[agentKey] = err.message;
+                    }
+                }
+            } else {
+                for (const agentKey of keys) {
+                    try {
+                        results[agentKey] = ctx.agentOverrides.disable(agentKey);
+                    } catch (err) {
+                        failed[agentKey] = err.message;
+                    }
+                }
+            }
+
+            const applied = Object.keys(results);
+            ctx.db.logAudit(
+                'router',
+                'master',
+                'master_toggle',
+                `Master toggle ${turnOn ? 'ON' : 'OFF'} for ${applied.length}/${keys.length} agents`
+                    + (Object.keys(failed).length ? ` (failed: ${Object.keys(failed).join(', ')})` : ''),
+                false
+            );
+            ctx.broadcast('router.master_toggle', { enabled: turnOn, applied });
+            ctx._sendJson(res, 200, {
+                ok: true,
+                enabled: turnOn,
+                applied,
+                failed: Object.keys(failed).length ? failed : undefined,
+                agents: ctx.agentOverrides.describeAll(),
+            });
+            return true;
+        }
+    }
+
     return false;
 }
 

@@ -1,0 +1,2 @@
+# MemorySearch uses NUL sentinels in its FTS5 query sanitizer; treat as text.
+core/MemorySearch.js -text diff
