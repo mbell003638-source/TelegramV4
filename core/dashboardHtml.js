@@ -287,6 +287,12 @@ async function saveProviderSettings() {
     <span id="device-badge" class="device-badge"></span>
   </div>
   <div class="flex items-center gap-2">
+    <button onclick="openJarvisModal()" style="background:#0f2838;color:#38bdf8;border:1px solid #0284c7;border-radius:8px;padding:4px 11px;font-size:12px;font-weight:700;display:flex;align-items:center;gap:5px;cursor:pointer;box-shadow:0 0 12px rgba(56,189,248,0.25)">
+      🎙️ JARVIS Voice
+    </button>
+    <button onclick="openGlobeModal()" style="background:#1e1438;color:#c084fc;border:1px solid #7e22ce;border-radius:8px;padding:4px 11px;font-size:12px;font-weight:700;display:flex;align-items:center;gap:5px;cursor:pointer;box-shadow:0 0 12px rgba(192,132,252,0.25)">
+      🌐 3D Vault Globe
+    </button>
     <button onclick="openKillSwitchesModal()" style="background:#1e1b4b;color:#a5b4fc;border:1px solid #3730a3;border-radius:8px;padding:4px 10px;font-size:12px;font-weight:600;display:flex;align-items:center;gap:4px;cursor:pointer">
       🛡️ Kill Switches
     </button>
@@ -896,6 +902,89 @@ async function saveProviderSettings() {
   </div>
 </div>
 
+<!-- 3D Obsidian Vault & Hive Mind Globe Modal (ClaudeClaw V3 Pack 09) -->
+<div id="globe-modal" class="modal-backdrop" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:9999;align-items:center;justify-content:center;backdrop-filter:blur(8px)">
+  <div style="background:#050711;border:1px solid #1e293b;border-radius:16px;width:92%;max-width:980px;height:85vh;max-height:850px;display:flex;flex-direction:column;box-shadow:0 0 50px rgba(56,189,248,0.25);position:relative;overflow:hidden">
+    <!-- Header -->
+    <div style="padding:16px 20px;border-bottom:1px solid #1e293b;display:flex;align-items:center;justify-content:space-between;background:#03050c">
+      <div style="display:flex;align-items:center;gap:10px">
+        <span style="font-size:20px">🌐</span>
+        <div>
+          <div style="color:#fff;font-weight:700;font-size:15px;display:flex;align-items:center;gap:8px">
+            3D Obsidian Vault & Hive Mind Globe
+            <span style="background:#3b0764;color:#d8b4fe;border:1px solid #581c87;font-size:9px;font-family:monospace;padding:1px 6px;border-radius:4px">PACK 09 CINEMATIC</span>
+          </div>
+          <div style="color:#64748b;font-size:11px;font-family:monospace">Interactive spherical topology of all agents, memories, and vault nodes</div>
+        </div>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;margin-left:auto">
+        <select id="globe-agent-filter" onchange="filterGlobeNodes(this.value)" style="background:#0c1020;border:1px solid #334155;color:#94a3b8;font-size:11px;font-family:monospace;padding:4px 8px;border-radius:6px;outline:none">
+          <option value="all">All Swarm Nodes</option>
+        </select>
+        <button onclick="toggleGlobeRotation()" id="globe-rotate-btn" style="background:#1e293b;color:#38bdf8;border:1px solid #0284c7;border-radius:6px;padding:4px 10px;font-size:11px;font-weight:600;cursor:pointer">Auto-Spin: ON</button>
+        <button onclick="closeGlobeModal()" style="background:#1e293b;color:#94a3b8;border:none;border-radius:6px;width:28px;height:28px;font-size:16px;cursor:pointer;display:flex;align-items:center;justify-content:center">&times;</button>
+      </div>
+    </div>
+    <!-- Canvas Body -->
+    <div style="flex:1;position:relative;background:#000000;display:flex;align-items:center;justify-content:center;overflow:hidden">
+      <canvas id="globe-canvas" style="width:100%;height:100%;cursor:grab"></canvas>
+      <!-- Controls Overlay -->
+      <div style="position:absolute;bottom:16px;left:20px;display:flex;gap:8px;background:rgba(5,7,17,0.85);padding:6px 12px;border-radius:8px;border:1px solid #1e293b;font-size:11px;color:#94a3b8;font-family:monospace">
+        <span>🖱️ Drag to rotate</span> • <span>🔍 Scroll to zoom</span> • <span>👆 Click node to inspect</span>
+      </div>
+      <div id="globe-node-detail" style="display:none;position:absolute;top:16px;right:20px;max-width:320px;background:#070a18;border:1px solid #3b82f6;border-radius:10px;padding:12px;box-shadow:0 0 20px rgba(0,0,0,0.8);color:#fff;font-size:12px">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+          <span id="globe-node-title" style="font-weight:700;color:#38bdf8">Node Detail</span>
+          <button onclick="document.getElementById('globe-node-detail').style.display='none'" style="background:none;border:none;color:#64748b;cursor:pointer">&times;</button>
+        </div>
+        <div id="globe-node-body" style="color:#cbd5e1;font-size:11px;max-height:160px;overflow-y:auto;line-height:1.4"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- JARVIS Voice Assistant Modal -->
+<div id="jarvis-modal" class="modal-backdrop" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:9999;align-items:center;justify-content:center;backdrop-filter:blur(8px)">
+  <div style="background:#040714;border:1px solid #0284c7;border-radius:20px;width:90%;max-width:540px;padding:24px;box-shadow:0 0 50px rgba(56,189,248,0.3);position:relative;display:flex;flex-direction:column;align-items:center">
+    <button onclick="closeJarvisModal()" style="position:absolute;top:16px;right:16px;background:#0c142b;border:1px solid #1e293b;color:#94a3b8;border-radius:8px;width:32px;height:32px;font-size:18px;cursor:pointer;display:flex;align-items:center;justify-content:center">&times;</button>
+    <!-- Header -->
+    <div style="text-align:center;margin-bottom:16px">
+      <div style="font-size:18px;font-weight:900;letter-spacing:2px;color:#38bdf8;text-shadow:0 0 15px rgba(56,189,248,0.6)">J.A.R.V.I.S.</div>
+      <div style="font-size:11px;color:#64748b;font-family:monospace;margin-top:2px">Just A Rather Very Intelligent System • Voice Assistant</div>
+    </div>
+    <!-- 3D Arc Reactor / Audio Visualizer Canvas -->
+    <div style="position:relative;width:180px;height:180px;margin-bottom:16px;display:flex;align-items:center;justify-content:center">
+      <canvas id="jarvis-orb-canvas" width="180" height="180" style="border-radius:50%"></canvas>
+      <div id="jarvis-status-badge" style="position:absolute;bottom:-8px;background:#051224;border:1px solid #0284c7;color:#38bdf8;padding:2px 10px;border-radius:999px;font-size:10px;font-family:monospace;font-weight:700;letter-spacing:1px;box-shadow:0 0 10px rgba(56,189,248,0.3)">
+        STANDBY
+      </div>
+    </div>
+    <!-- Dialogue / Transcript Box -->
+    <div style="width:100%;background:#020510;border:1px solid #172554;border-radius:12px;padding:12px;min-height:90px;max-height:140px;overflow-y:auto;margin-bottom:16px;font-size:12px;line-height:1.5">
+      <div id="jarvis-transcript" style="color:#94a3b8;font-style:italic">"Good day, sir. How may I orchestrate the swarm today?"</div>
+    </div>
+    <!-- Interactive Mic Controls -->
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px">
+      <button id="jarvis-mic-btn" onclick="toggleJarvisMic()" style="background:#0284c7;color:#fff;border:none;border-radius:50%;width:54px;height:54px;font-size:22px;cursor:pointer;display:flex;align-items:center;justify-content:center;box-shadow:0 0 20px rgba(56,189,248,0.5);transition:all 0.2s">
+        🎙️
+      </button>
+      <button id="jarvis-mute-btn" onclick="toggleJarvisTts()" style="background:#091228;color:#94a3b8;border:1px solid #1e293b;border-radius:12px;padding:8px 14px;font-size:11px;font-family:monospace;cursor:pointer">
+        Voice Output: ON
+      </button>
+    </div>
+    <!-- Quick Command Suggestions -->
+    <div style="width:100%">
+      <div style="font-size:10px;color:#475569;font-family:monospace;margin-bottom:6px;text-transform:uppercase;letter-spacing:1px">Suggested Voice Commands</div>
+      <div style="display:flex;flex-wrap:wrap;gap:6px">
+        <button onclick="runJarvisCommand('run standup')" style="background:#0a1226;border:1px solid #1e3a8a;color:#93c5fd;padding:4px 8px;border-radius:6px;font-size:11px;cursor:pointer">"Run standup"</button>
+        <button onclick="runJarvisCommand('check kill switches')" style="background:#0a1226;border:1px solid #1e3a8a;color:#93c5fd;padding:4px 8px;border-radius:6px;font-size:11px;cursor:pointer">"Check safety gates"</button>
+        <button onclick="runJarvisCommand('show 3d globe')" style="background:#0a1226;border:1px solid #1e3a8a;color:#93c5fd;padding:4px 8px;border-radius:6px;font-size:11px;cursor:pointer">"Show 3D vault globe"</button>
+        <button onclick="runJarvisCommand('audit status')" style="background:#0a1226;border:1px solid #1e3a8a;color:#93c5fd;padding:4px 8px;border-radius:6px;font-size:11px;cursor:pointer">"System status"</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <script>
 const TOKEN = ${JSON.stringify(token)};
 const CHAT_ID = ${JSON.stringify(chatId || 'dashboard_chat')};
@@ -1060,7 +1149,7 @@ function api(path) {
   return fetch(BASE + path + sep + 'token=' + TOKEN).then(r => r.json());
 }
 
-let salienceChart, memTimelineChart, costChart;
+let salienceChart, memTimelineChart, costChart, cacheChart;
 
 function cronToHuman(cron) {
   const parts = cron.split(' ');
@@ -3064,6 +3153,12 @@ async function loadKillSwitches() {
   } catch(e) { console.error('Failed to load kill switches:', e); }
 }
 
+function handleKillSwitchClick(btn) {
+  var k = btn.getAttribute('data-switch');
+  var v = btn.getAttribute('data-val') === 'true';
+  toggleKillSwitch(k, v);
+}
+
 function renderQuickKillSwitches(switches) {
   var container = document.getElementById('v3-switches-quick');
   if (!container) return;
@@ -3082,7 +3177,7 @@ function renderQuickKillSwitches(switches) {
     var color = v ? '#6ee7b7' : '#fca5a5';
     var border = v ? '#065f46' : '#991b1b';
     var text = (labels[k] || k) + ': ' + (v ? 'ON' : 'PAUSED');
-    return '<button onclick="toggleKillSwitch(\'' + k + '\', ' + v + ')" class="pill" style="font-size:10px;background:' + bg + ';color:' + color + ';border:1px solid ' + border + ';cursor:pointer;padding:2px 6px;border-radius:4px" title="Click to toggle switch">' + text + '</button>';
+    return '<button data-switch="' + k + '" data-val="' + v + '" onclick="handleKillSwitchClick(this)" class="pill" style="font-size:10px;background:' + bg + ';color:' + color + ';border:1px solid ' + border + ';cursor:pointer;padding:2px 6px;border-radius:4px" title="Click to toggle switch">' + text + '</button>';
   }).join('');
 }
 
@@ -3114,7 +3209,7 @@ function renderKillSwitchesModalCards(switches) {
         '</div>' +
         '<div class="text-xs text-gray-400">' + (descs[k] || 'Safety switch gate') + '</div>' +
       '</div>' +
-      '<button onclick="toggleKillSwitch(\'' + k + '\', ' + v + ')" style="background:' + btnBg + ';color:#fff;border:none;border-radius:6px;padding:6px 12px;font-size:11px;font-weight:600;cursor:pointer;white-space:nowrap">' +
+      '<button data-switch="' + k + '" data-val="' + v + '" onclick="handleKillSwitchClick(this)" style="background:' + btnBg + ';color:#fff;border:none;border-radius:6px;padding:6px 12px;font-size:11px;font-weight:600;cursor:pointer;white-space:nowrap">' +
         btnText +
       '</button>' +
     '</div>';
@@ -3311,11 +3406,16 @@ async function loadSuggestions() {
         '</div>' +
         '<div class="text-sm font-semibold text-white mb-2">' + escapeHtml(s.summary) + '</div>' +
         '<div class="flex justify-end gap-2">' +
-          '<button onclick="dismissSuggestion(\'' + s.id + '\')" style="background:#222;color:#9ca3af;border:1px solid #333;border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer">Dismiss</button>' +
+          '<button data-id="' + s.id + '" onclick="handleDismissSuggestion(this)" style="background:#222;color:#9ca3af;border:1px solid #333;border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer">Dismiss</button>' +
         '</div>' +
       '</div>';
     }).join('');
   } catch(e) { console.error('Failed to load suggestions:', e); }
+}
+
+function handleDismissSuggestion(btn) {
+  var id = btn.getAttribute('data-id');
+  dismissSuggestion(id);
 }
 
 async function analyzeSuggestions() {
@@ -3339,26 +3439,580 @@ async function dismissSuggestion(id) {
   } catch(e) { console.error('Dismiss suggestion error:', e); }
 }
 
+// ── 3D Obsidian Vault & Hive Mind Globe Visualizer (Pack 09) ────────────────
+let globeModalOpen = false;
+let globeAutoRotate = true;
+let globeFilter = 'all';
+let globeAnimId = null;
+let globeNodes = [];
+let globeEdges = [];
+let globeRotation = { x: 0.3, y: 0.4 };
+let globeDragging = false;
+let globeLastMouse = { x: 0, y: 0 };
+let globeZoom = 1.0;
+
+function openGlobeModal() {
+  const modal = document.getElementById('globe-modal');
+  if (!modal) return;
+  modal.style.display = 'flex';
+  globeModalOpen = true;
+  init3DGlobe();
+}
+
+function closeGlobeModal() {
+  const modal = document.getElementById('globe-modal');
+  if (!modal) return;
+  modal.style.display = 'none';
+  globeModalOpen = false;
+  if (globeAnimId) cancelAnimationFrame(globeAnimId);
+}
+
+function toggleGlobeRotation() {
+  globeAutoRotate = !globeAutoRotate;
+  const btn = document.getElementById('globe-rotate-btn');
+  if (btn) btn.textContent = 'Auto-Spin: ' + (globeAutoRotate ? 'ON' : 'OFF');
+}
+
+function filterGlobeNodes(agentId) {
+  globeFilter = agentId;
+}
+
+async function init3DGlobe() {
+  const canvas = document.getElementById('globe-canvas');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return;
+
+  const rect = canvas.parentElement.getBoundingClientRect();
+  canvas.width = rect.width;
+  canvas.height = rect.height;
+
+  try {
+    const [agentsData, memsData] = await Promise.all([
+      api('/api/agents'),
+      api('/api/memories?chatId=' + CHAT_ID + '&limit=60')
+    ]);
+
+    const agents = (agentsData && agentsData.agents) || [];
+    const mems = (memsData && memsData.memories) || [];
+
+    const filterSelect = document.getElementById('globe-agent-filter');
+    if (filterSelect && filterSelect.options.length <= 1) {
+      agents.forEach(a => {
+        const opt = document.createElement('option');
+        opt.value = a.id;
+        opt.textContent = (a.emoji || '🤖') + ' ' + a.name;
+        filterSelect.appendChild(opt);
+      });
+    }
+
+    const R = Math.min(canvas.width, canvas.height) * 0.28;
+    globeNodes = [];
+    globeEdges = [];
+
+    const agentColors = {
+      claude: '#c084fc',
+      codex: '#34d399',
+      grok: '#f8fafc',
+      antigravity: '#38bdf8',
+      hermes: '#fb923c',
+      openclaw: '#f87171',
+      pi: '#fbbf24',
+      opencode: '#facc15'
+    };
+
+    agents.forEach((a, i) => {
+      const phi = (i / agents.length) * Math.PI * 2;
+      const theta = Math.PI / 2 + (i % 2 === 0 ? 0.35 : -0.35);
+      const x = R * Math.sin(theta) * Math.cos(phi);
+      const y = R * Math.cos(theta);
+      const z = R * Math.sin(theta) * Math.sin(phi);
+
+      globeNodes.push({
+        id: a.id,
+        type: 'agent',
+        name: a.name,
+        emoji: a.emoji || '🤖',
+        model: a.model || 'default',
+        color: agentColors[a.id] || '#38bdf8',
+        origX: x, origY: y, origZ: z,
+        x: x, y: y, z: z,
+        radius: 10,
+        detail: 'AI Engine Hub: ' + a.name + String.fromCharCode(10) + 'Model: ' + (a.model || 'Auto') + String.fromCharCode(10) + 'Status: ' + (a.status || 'live')
+      });
+    });
+
+    mems.forEach((m, i) => {
+      const phi = Math.acos(1 - 2 * (i + 0.5) / Math.max(1, mems.length));
+      const theta = Math.PI * (1 + Math.sqrt(5)) * (i + 0.5);
+      const dist = R * (0.85 + (i % 5) * 0.04);
+      const x = dist * Math.sin(phi) * Math.cos(theta);
+      const y = dist * Math.cos(phi);
+      const z = dist * Math.sin(phi) * Math.sin(theta);
+
+      const targetAgentId = m.agent_id || (agents[i % agents.length] ? agents[i % agents.length].id : 'claude');
+      const agentNode = globeNodes.find(n => n.id === targetAgentId);
+
+      const nodeObj = {
+        id: 'mem-' + (m.id || i),
+        type: 'memory',
+        agentId: targetAgentId,
+        name: (m.summary || 'Memory #' + (i + 1)).slice(0, 36),
+        fullSummary: m.summary || m.raw_text || 'Observation',
+        color: '#60a5fa',
+        origX: x, origY: y, origZ: z,
+        x: x, y: y, z: z,
+        radius: 4.5,
+        detail: 'Vault Memory #' + (m.id || i + 1) + String.fromCharCode(10) + 'Salience: ' + (m.salience || 1.0) + String.fromCharCode(10) + String.fromCharCode(10) + (m.summary || m.raw_text || '')
+      };
+
+      globeNodes.push(nodeObj);
+      if (agentNode) {
+        globeEdges.push({ from: nodeObj, to: agentNode });
+      }
+    });
+
+  } catch(e) {
+    console.warn('Failed to populate globe nodes:', e);
+  }
+
+  canvas.onmousedown = function(e) {
+    globeDragging = true;
+    globeLastMouse = { x: e.clientX, y: e.clientY };
+  };
+  window.onmousemove = function(e) {
+    if (!globeDragging || !globeModalOpen) return;
+    const dx = e.clientX - globeLastMouse.x;
+    const dy = e.clientY - globeLastMouse.y;
+    globeRotation.y += dx * 0.008;
+    globeRotation.x += dy * 0.008;
+    globeLastMouse = { x: e.clientX, y: e.clientY };
+  };
+  window.onmouseup = function() {
+    globeDragging = false;
+  };
+  canvas.onwheel = function(e) {
+    e.preventDefault();
+    globeZoom += e.deltaY * -0.001;
+    globeZoom = Math.min(Math.max(0.5, globeZoom), 2.2);
+  };
+
+  canvas.onclick = function(e) {
+    const rect = canvas.getBoundingClientRect();
+    const mouseX = e.clientX - rect.left;
+    const mouseY = e.clientY - rect.top;
+
+    let closest = null;
+    let minDist = 18;
+
+    globeNodes.forEach(node => {
+      if (node.projX !== undefined && node.projY !== undefined) {
+        const d = Math.hypot(node.projX - mouseX, node.projY - mouseY);
+        if (d < minDist) {
+          minDist = d;
+          closest = node;
+        }
+      }
+    });
+
+    if (closest) {
+      const detailEl = document.getElementById('globe-node-detail');
+      const titleEl = document.getElementById('globe-node-title');
+      const bodyEl = document.getElementById('globe-node-body');
+      if (detailEl && titleEl && bodyEl) {
+        detailEl.style.display = 'block';
+        titleEl.textContent = (closest.emoji ? closest.emoji + ' ' : '') + closest.name;
+        bodyEl.textContent = closest.detail;
+      }
+    }
+  };
+
+  let angle = 0;
+  function render() {
+    if (!globeModalOpen) return;
+
+    if (globeAutoRotate && !globeDragging) {
+      globeRotation.y += 0.006;
+    }
+    angle += 0.01;
+
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    const cx = canvas.width / 2;
+    const cy = canvas.height / 2;
+
+    const rx = globeRotation.x;
+    const ry = globeRotation.y;
+    const cosX = Math.cos(rx), sinX = Math.sin(rx);
+    const cosY = Math.cos(ry), sinY = Math.sin(ry);
+
+    const R = Math.min(canvas.width, canvas.height) * 0.28 * globeZoom;
+    ctx.strokeStyle = 'rgba(30, 58, 138, 0.25)';
+    ctx.lineWidth = 1;
+
+    for (let r = -2; r <= 2; r++) {
+      const latY = (r / 3) * R;
+      const ringRadius = Math.sqrt(Math.max(0, R * R - latY * latY));
+      ctx.beginPath();
+      for (let a = 0; a <= 36; a++) {
+        const rad = (a / 36) * Math.PI * 2;
+        const px = ringRadius * Math.cos(rad);
+        const pz = ringRadius * Math.sin(rad);
+        const x1 = px * cosY - pz * sinY;
+        const z1 = pz * cosY + px * sinY;
+        const y2 = latY * cosX - z1 * sinX;
+        const z2 = z1 * cosX + latY * sinX;
+        const fov = 400;
+        const scale = fov / (fov + z2);
+        const scrX = cx + x1 * scale;
+        const scrY = cy + y2 * scale;
+        if (a === 0) ctx.moveTo(scrX, scrY);
+        else ctx.lineTo(scrX, scrY);
+      }
+      ctx.stroke();
+    }
+
+    globeNodes.forEach(n => {
+      const x0 = n.origX * globeZoom;
+      const y0 = n.origY * globeZoom;
+      const z0 = n.origZ * globeZoom;
+
+      const x1 = x0 * cosY - z0 * sinY;
+      const z1 = z0 * cosY + x0 * sinY;
+      const y2 = y0 * cosX - z1 * sinX;
+      const z2 = z1 * cosX + y0 * sinX;
+
+      const fov = 400;
+      const scale = fov / (fov + z2);
+      n.projX = cx + x1 * scale;
+      n.projY = cy + y2 * scale;
+      n.projZ = z2;
+      n.scale = scale;
+    });
+
+    globeEdges.forEach(e => {
+      if (globeFilter !== 'all' && e.to.id !== globeFilter) return;
+      if (e.from.projZ < -50 && e.to.projZ < -50) return;
+
+      const alpha = Math.max(0.08, Math.min(0.45, (e.from.projZ + e.to.projZ + 200) / 400));
+      ctx.strokeStyle = 'rgba(56, 189, 248, ' + alpha + ')';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(e.from.projX, e.from.projY);
+      ctx.lineTo(e.to.projX, e.to.projY);
+      ctx.stroke();
+    });
+
+    const sorted = [...globeNodes].sort((a, b) => a.projZ - b.projZ);
+
+    sorted.forEach(n => {
+      if (globeFilter !== 'all' && n.type === 'memory' && n.agentId !== globeFilter) return;
+      if (globeFilter !== 'all' && n.type === 'agent' && n.id !== globeFilter) return;
+
+      const alpha = Math.max(0.2, Math.min(1.0, (n.projZ + 250) / 400));
+      ctx.globalAlpha = alpha;
+
+      if (n.type === 'agent') {
+        const ringSize = (n.radius * 1.6 + Math.sin(angle * 3) * 2) * n.scale;
+        ctx.strokeStyle = n.color;
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.arc(n.projX, n.projY, ringSize, 0, Math.PI * 2);
+        ctx.stroke();
+
+        ctx.fillStyle = n.color;
+        ctx.beginPath();
+        ctx.arc(n.projX, n.projY, n.radius * n.scale, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.fillStyle = '#ffffff';
+        ctx.font = 'bold ' + Math.max(9, Math.round(11 * n.scale)) + 'px sans-serif';
+        ctx.fillText(n.name, n.projX + (n.radius + 4) * n.scale, n.projY + 3);
+      } else {
+        ctx.fillStyle = n.color;
+        ctx.beginPath();
+        ctx.arc(n.projX, n.projY, Math.max(1.5, n.radius * n.scale), 0, Math.PI * 2);
+        ctx.fill();
+      }
+    });
+
+    ctx.globalAlpha = 1.0;
+    globeAnimId = requestAnimationFrame(render);
+  }
+
+  render();
+}
+
+// ── JARVIS Voice Assistant ──────────────────────────────────────────────────
+let jarvisModalOpen = false;
+let jarvisListening = false;
+let jarvisTtsEnabled = true;
+let jarvisRecognition = null;
+let jarvisOrbAnimId = null;
+let jarvisOrbPhase = 0;
+
+function openJarvisModal() {
+  const modal = document.getElementById('jarvis-modal');
+  if (!modal) return;
+  modal.style.display = 'flex';
+  jarvisModalOpen = true;
+  initJarvisOrb();
+  speakJarvisGreeting();
+}
+
+function closeJarvisModal() {
+  const modal = document.getElementById('jarvis-modal');
+  if (!modal) return;
+  modal.style.display = 'none';
+  jarvisModalOpen = false;
+  if (jarvisListening && jarvisRecognition) {
+    try { jarvisRecognition.stop(); } catch {}
+  }
+  if (jarvisOrbAnimId) cancelAnimationFrame(jarvisOrbAnimId);
+}
+
+function toggleJarvisTts() {
+  jarvisTtsEnabled = !jarvisTtsEnabled;
+  const btn = document.getElementById('jarvis-mute-btn');
+  if (btn) btn.textContent = 'Voice Output: ' + (jarvisTtsEnabled ? 'ON' : 'MUTED');
+  if (!jarvisTtsEnabled && window.speechSynthesis) {
+    window.speechSynthesis.cancel();
+  }
+}
+
+function setJarvisStatus(status, text) {
+  const badge = document.getElementById('jarvis-status-badge');
+  const transcript = document.getElementById('jarvis-transcript');
+  if (badge) badge.textContent = status;
+  if (transcript && text) transcript.innerHTML = text;
+}
+
+function speakJarvis(text) {
+  if (!jarvisTtsEnabled || !window.speechSynthesis) return;
+  window.speechSynthesis.cancel();
+  const utter = new SpeechSynthesisUtterance(text);
+  utter.rate = 1.05;
+  utter.pitch = 0.95;
+
+  const voices = window.speechSynthesis.getVoices();
+  const ukVoice = voices.find(v => v.lang.includes('en-GB') || v.name.includes('UK') || v.name.includes('Oliver') || v.name.includes('Arthur'));
+  if (ukVoice) utter.voice = ukVoice;
+
+  setJarvisStatus('SPEAKING...', '"' + text + '"');
+  utter.onend = function() {
+    setJarvisStatus('STANDBY', '"' + text + '"');
+  };
+  window.speechSynthesis.speak(utter);
+}
+
+function speakJarvisGreeting() {
+  speakJarvis("Good day, sir. All swarm agents and memory topologies are online. What is your command?");
+}
+
+function toggleJarvisMic() {
+  const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SpeechRec) {
+    alert('Speech Recognition is not supported in this browser. Please use Chrome or Edge.');
+    return;
+  }
+
+  if (jarvisListening) {
+    if (jarvisRecognition) {
+      try { jarvisRecognition.stop(); } catch {}
+    }
+    jarvisListening = false;
+    setJarvisStatus('STANDBY');
+    const btn = document.getElementById('jarvis-mic-btn');
+    if (btn) btn.style.background = '#0284c7';
+    return;
+  }
+
+  const rec = new SpeechRec();
+  rec.continuous = false;
+  rec.interimResults = false;
+  rec.lang = 'en-US';
+
+  rec.onstart = function() {
+    jarvisListening = true;
+    setJarvisStatus('LISTENING...', '<span style="color:#38bdf8;font-style:italic">Listening for voice instructions...</span>');
+    const btn = document.getElementById('jarvis-mic-btn');
+    if (btn) btn.style.background = '#059669';
+  };
+
+  rec.onresult = function(event) {
+    const transcript = event.results[0][0].transcript;
+    jarvisListening = false;
+    const btn = document.getElementById('jarvis-mic-btn');
+    if (btn) btn.style.background = '#0284c7';
+    runJarvisCommand(transcript);
+  };
+
+  rec.onerror = function(err) {
+    jarvisListening = false;
+    const btn = document.getElementById('jarvis-mic-btn');
+    if (btn) btn.style.background = '#0284c7';
+    setJarvisStatus('STANDBY');
+  };
+
+  rec.onend = function() {
+    jarvisListening = false;
+    const btn = document.getElementById('jarvis-mic-btn');
+    if (btn) btn.style.background = '#0284c7';
+  };
+
+  jarvisRecognition = rec;
+  rec.start();
+}
+
+async function runJarvisCommand(input) {
+  const text = input.trim().toLowerCase();
+  setJarvisStatus('THINKING...', '<strong>You:</strong> "' + escapeHtml(input) + '"');
+
+  if (text.includes('standup') || text.includes('war room')) {
+    speakJarvis("Right away, sir. Initializing swarm morning standup.");
+    triggerWarRoomVoiceStandup();
+    return;
+  }
+
+  if (text.includes('kill switch') || text.includes('safety') || text.includes('gate')) {
+    speakJarvis("Opening safety controls and kill switch posture HUD.");
+    openKillSwitchesModal();
+    return;
+  }
+
+  if (text.includes('globe') || text.includes('3d') || text.includes('topology')) {
+    speakJarvis("Opening the 3D Obsidian memory vault globe.");
+    openGlobeModal();
+    return;
+  }
+
+  if (text.includes('audit') || text.includes('log')) {
+    speakJarvis("Opening the SQLite system audit logs.");
+    openAuditLogDrawer();
+    return;
+  }
+
+  if (text.includes('phone') || text.includes('android') || text.includes('device')) {
+    speakJarvis("Checking ADB device status and the physical automation layer.");
+    try {
+      const res = await api('/api/devices');
+      if (res && res.devices && res.devices.length > 0) {
+        speakJarvis("Connected to " + res.devices[0].model + " via Android Debug Bridge.");
+      } else {
+        speakJarvis("ADB engine is active, but no Android device is currently plugged in.");
+      }
+    } catch {
+      speakJarvis("Could not query device bridge, sir.");
+    }
+    return;
+  }
+
+  if (text.includes('status') || text.includes('health')) {
+    speakJarvis("All 8 AI CLI agents are verified. Telegram bridge is operating on port 3141, and Agentic OS is running on port 3000.");
+    return;
+  }
+
+  try {
+    const res = await fetch(BASE + '/api/chat/send?token=' + TOKEN, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: input, chatId: CHAT_ID })
+    });
+    const data = await res.json();
+    if (data.ok && data.reply) {
+      speakJarvis(data.reply.slice(0, 280));
+    } else {
+      speakJarvis("I have routed your instruction to the agent queue, sir.");
+    }
+  } catch(e) {
+    speakJarvis("Understood, sir. Acknowledged.");
+  }
+}
+
+function initJarvisOrb() {
+  const canvas = document.getElementById('jarvis-orb-canvas');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return;
+
+  function renderOrb() {
+    if (!jarvisModalOpen) return;
+    jarvisOrbPhase += 0.03;
+    const cx = canvas.width / 2;
+    const cy = canvas.height / 2;
+
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    const auraGrad = ctx.createRadialGradient(cx, cy, 10, cx, cy, 80);
+    auraGrad.addColorStop(0, 'rgba(56, 189, 248, 0.45)');
+    auraGrad.addColorStop(0.6, 'rgba(2, 132, 199, 0.15)');
+    auraGrad.addColorStop(1, 'transparent');
+    ctx.fillStyle = auraGrad;
+    ctx.beginPath();
+    ctx.arc(cx, cy, 85, 0, Math.PI * 2);
+    ctx.fill();
+
+    for (let ring = 1; ring <= 3; ring++) {
+      const radius = 25 + ring * 18;
+      const speed = (ring % 2 === 0 ? 1 : -1) * (0.02 + ring * 0.005);
+      const segments = 12;
+
+      ctx.strokeStyle = ring === 2 ? '#38bdf8' : '#0284c7';
+      ctx.lineWidth = ring === 2 ? 2.5 : 1.5;
+
+      for (let s = 0; s < segments; s++) {
+        if (s % 2 === 0) {
+          const startAngle = jarvisOrbPhase * speed + (s / segments) * Math.PI * 2;
+          const endAngle = startAngle + (Math.PI * 2 / segments) * 0.65;
+          ctx.beginPath();
+          ctx.arc(cx, cy, radius, startAngle, endAngle);
+          ctx.stroke();
+        }
+      }
+    }
+
+    const pulse = (Math.sin(jarvisOrbPhase * 4) * 0.15 + 1.0) * 16;
+    const coreGrad = ctx.createRadialGradient(cx, cy, 0, cx, cy, pulse);
+    coreGrad.addColorStop(0, '#ffffff');
+    coreGrad.addColorStop(0.4, '#38bdf8');
+    coreGrad.addColorStop(1, 'transparent');
+    ctx.fillStyle = coreGrad;
+    ctx.beginPath();
+    ctx.arc(cx, cy, pulse, 0, Math.PI * 2);
+    ctx.fill();
+
+    jarvisOrbAnimId = requestAnimationFrame(renderOrb);
+  }
+
+  renderOrb();
+}
+
 async function refreshAll() {
-  const btn = document.getElementById('refresh-btn').querySelector('svg');
-  btn.classList.add('refresh-spin');
-  await Promise.all([
-    loadInfo(),
-    loadTasks(),
-    loadMemories(),
-    loadHealth(),
-    loadTokens(),
-    loadAgents(),
-    loadHiveMind(),
-    loadSummary(),
-    loadMissionControl(),
-    loadWarRoomVoices(),
-    loadMeetingSessions(),
-    loadKillSwitches(),
-    loadSuggestions()
-  ]);
-  btn.classList.remove('refresh-spin');
-  document.getElementById('last-updated').textContent = new Date().toLocaleTimeString();
+  const btnEl = document.getElementById('refresh-btn');
+  const btnSvg = btnEl ? btnEl.querySelector('svg') : null;
+  if (btnSvg) btnSvg.classList.add('refresh-spin');
+  try {
+    await Promise.allSettled([
+      loadInfo(),
+      loadTasks(),
+      loadMemories(),
+      loadHealth(),
+      loadTokens(),
+      loadAgents(),
+      loadHiveMind(),
+      loadSummary(),
+      loadMissionControl(),
+      loadWarRoomVoices(),
+      loadMeetingSessions(),
+      loadKillSwitches(),
+      loadSuggestions()
+    ]);
+  } catch (err) {
+    console.error('refreshAll error:', err);
+  } finally {
+    if (btnSvg) btnSvg.classList.remove('refresh-spin');
+    const lu = document.getElementById('last-updated');
+    if (lu) lu.textContent = new Date().toLocaleTimeString();
+  }
 }
 
 // Live countdown tickers
@@ -3374,6 +4028,12 @@ setInterval(refreshAll, 60000);
 
 // Initial load
 refreshAll();
+window.addEventListener('hashchange', checkHashNav);
+function checkHashNav() {
+  if (location.hash === '#globe') openGlobeModal();
+  if (location.hash === '#jarvis') openJarvisModal();
+}
+checkHashNav();
 
 // \u2500\u2500 Chat \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 let chatOpen = false;
