@@ -20,7 +20,7 @@ const { getDeviceAutomation } = require('./DeviceAutomation');
 const { handleRouterRoutes } = require('./RouterRoutes');
 
 class MissionControlServer {
-    constructor({ database, sessionStore, actionExecutor, agents, port = 3141, token = null, providerRouter = null, providerRegistry = null, agentOverrides = null }) {
+    constructor({ database, sessionStore, actionExecutor, agents, port = 3141, token = null, providerRouter = null, providerRegistry = null, agentOverrides = null, memorySearch = null, taskPlanner = null, scheduler = null }) {
         this.db = database;
         this.sessionStore = sessionStore;
         this.actionExecutor = actionExecutor;
@@ -35,6 +35,9 @@ class MissionControlServer {
         this.providerRouter = providerRouter;
         this.providerRegistry = providerRegistry;
         this.agentOverrides = agentOverrides;
+        this.memorySearch = memorySearch;
+        this.taskPlanner = taskPlanner;
+        this.scheduler = scheduler;
         // Set by index.js when the WhatsApp Cloud API channel is configured.
         this.whatsappWebhook = null;
         // OmniRouter OpenAI-compatible surface (/v1/*), gated by its own master key.
@@ -211,6 +214,12 @@ class MissionControlServer {
                 });
                 return;
             }
+
+            // OmniRouter, per-agent override toggle, memory search, planner and
+            // scheduler. Dispatched before the numbered routes below because some
+            // of those match on a prefix (e.g. startsWith('/api/memories')) and
+            // would otherwise shadow these exact paths.
+            if (await handleRouterRoutes(this, req, res, pathname, query)) return;
 
             // 1. Status & System Info
             if (pathname === '/api/info' || pathname === '/api/status' || pathname === '/api/health') {
@@ -839,9 +848,6 @@ class MissionControlServer {
                 }
             }
 
-            // 7d. OmniRouter gateway + per-agent provider override toggle
-
-            if (await handleRouterRoutes(this, req, res, pathname, query)) return;
 
 
             // 7c. Kill Switches (ClaudeClaw V3 Pack 02)

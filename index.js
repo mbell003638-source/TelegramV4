@@ -245,6 +245,9 @@ async function main() {
     });
 
     scheduler.start();
+    // Attached after construction because the scheduler needs
+    // missionControl's kill switches.
+    missionControl.scheduler = scheduler;
 
 
     // 5b. Optional WhatsApp Cloud API Gateway (webhook rides on Mission Control)

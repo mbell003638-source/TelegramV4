@@ -184,87 +184,134 @@ async function handleRouterRoutes(ctx, req, res, pathname, query) {
         }
     }
 
-    // --- MASTER TOGGLE: wire every agent to the router in one switch ---
-    //  This is the headline control. ON re-points every toggleable agent at the
-    //  OmniRouter at once; OFF reverts each one to its own defaults, losslessly.
-    if (pathname === '/api/router/master') {
-        if (!ctx.agentOverrides) {
-            ctx._sendJson(res, 503, { error: 'Agent overrides not configured' });
+    // --- Shared searchable memory ---
+    //  Any agent can recall what any other agent learned, in any past session.
+    if (pathname === '/api/memories/search') {
+        if (!ctx.memorySearch) {
+            ctx._sendJson(res, 503, { error: 'Memory search not configured' });
             return true;
         }
+        const q = query.q || query.query || '';
+        const results = ctx.memorySearch.search(q, {
+            chatId: query.chatId,
+            agentId: query.agentId,
+            limit: Number(query.limit) || 20,
+        });
+        ctx._sendJson(res, 200, { query: q, results, stats: ctx.memorySearch.stats() });
+        return true;
+    }
 
-        const all = ctx.agentOverrides.describeAll();
-        const keys = Object.keys(all);
+    if (pathname === '/api/memories/reindex' && req.method === 'POST') {
+        if (!ctx.memorySearch) {
+            ctx._sendJson(res, 503, { error: 'Memory search not configured' });
+            return true;
+        }
+        const indexed = ctx.memorySearch.reindexAll();
+        ctx.broadcast('memory.reindexed', { indexed });
+        ctx._sendJson(res, 200, { ok: true, indexed, stats: ctx.memorySearch.stats() });
+        return true;
+    }
 
+    // --- Task planner: decompose -> pick a model per subtask -> run -> merge ---
+    if (pathname === '/api/planner/plan' && req.method === 'POST') {
+        if (!ctx.taskPlanner) {
+            ctx._sendJson(res, 503, { error: 'Task planner not configured' });
+            return true;
+        }
+        const body = await ctx._readBody(req);
+        const request = (body.request || body.message || '').trim();
+        if (!request) {
+            ctx._sendJson(res, 400, { error: 'request required' });
+            return true;
+        }
+        try {
+            // Plan only — lets the UI show the graph before anything executes.
+            const plan = await ctx.taskPlanner.plan(request, { context: body.context });
+            ctx._sendJson(res, 200, { ok: true, plan });
+        } catch (err) {
+            ctx._sendJson(res, 500, { error: err.message });
+        }
+        return true;
+    }
+
+    if (pathname === '/api/planner/run' && req.method === 'POST') {
+        if (!ctx.taskPlanner) {
+            ctx._sendJson(res, 503, { error: 'Task planner not configured' });
+            return true;
+        }
+        const body = await ctx._readBody(req);
+        const request = (body.request || body.message || '').trim();
+        if (!request) {
+            ctx._sendJson(res, 400, { error: 'request required' });
+            return true;
+        }
+        try {
+            const result = await ctx.taskPlanner.run(request, {
+                concurrency: Number(body.concurrency) || 3,
+                onProgress: (evt) => ctx.broadcast('planner.progress', evt),
+            });
+            ctx.db.logAudit('planner', 'run', 'plan_executed',
+                `Planner executed ${result.plan?.tasks?.length || 0} task(s)`, false);
+            ctx._sendJson(res, 200, { ok: true, ...result });
+        } catch (err) {
+            ctx._sendJson(res, 500, { error: err.message });
+        }
+        return true;
+    }
+
+    // --- Scheduler: create, pause and delete recurring tasks ---
+    if (pathname === '/api/scheduler/tasks') {
+        if (!ctx.scheduler) {
+            ctx._sendJson(res, 503, { error: 'Scheduler not configured' });
+            return true;
+        }
         if (req.method === 'GET') {
-            const on = keys.filter((k) => all[k].enabled);
-            ctx._sendJson(res, 200, {
-                // 'on' only when every agent is wired, so the UI switch never
-                // claims a partial rollout is complete.
-                state: on.length === 0 ? 'off' : (on.length === keys.length ? 'on' : 'partial'),
-                enabledCount: on.length,
-                totalCount: keys.length,
-                enabled: on,
-                agents: all,
-            });
+            ctx._sendJson(res, 200, { tasks: ctx.db.getScheduledTasks(query.chatId) });
             return true;
         }
-
-        if (req.method === 'POST' || req.method === 'PATCH') {
+        if (req.method === 'POST') {
             const body = await ctx._readBody(req);
-            const turnOn = !!body.enabled;
-            const results = {};
-            const failed = {};
-
-            if (turnOn) {
-                const baseUrl = body.baseUrl || `http://127.0.0.1:${ctx.port}/v1`;
-                const apiKey = body.apiKey
-                    || (ctx.providerRouter ? ctx.providerRouter.getMasterKey() : null);
-                if (!apiKey) {
-                    ctx._sendJson(res, 400, { error: 'No apiKey supplied and router is unavailable' });
-                    return true;
-                }
-                for (const agentKey of keys) {
-                    try {
-                        results[agentKey] = ctx.agentOverrides.enable(agentKey, {
-                            providerId: body.providerId || 'omnirouter',
-                            // A per-agent model beats the one blanket model.
-                            model: (body.models && body.models[agentKey]) || body.model,
-                            baseUrl,
-                            apiKey,
-                        });
-                    } catch (err) {
-                        // One unsupported agent must not abort the whole sweep.
-                        failed[agentKey] = err.message;
-                    }
-                }
-            } else {
-                for (const agentKey of keys) {
-                    try {
-                        results[agentKey] = ctx.agentOverrides.disable(agentKey);
-                    } catch (err) {
-                        failed[agentKey] = err.message;
-                    }
-                }
+            if (!body.schedule || !body.prompt) {
+                ctx._sendJson(res, 400, { error: 'schedule (cron) and prompt are required' });
+                return true;
             }
+            try {
+                // Validate the cron up front so a bad expression is rejected
+                // here rather than silently never firing.
+                ctx.scheduler.parseCron(body.schedule);
+                const task = ctx.scheduler.scheduleTask({
+                    chatId: body.chatId || '',
+                    agentId: body.agentId || 'main',
+                    prompt: body.prompt,
+                    schedule: body.schedule,
+                });
+                ctx.broadcast('scheduler.task_created', task);
+                ctx._sendJson(res, 200, { ok: true, task });
+            } catch (err) {
+                ctx._sendJson(res, 400, { error: err.message });
+            }
+            return true;
+        }
+    }
 
-            const applied = Object.keys(results);
-            ctx.db.logAudit(
-                'router',
-                'master',
-                'master_toggle',
-                `Master toggle ${turnOn ? 'ON' : 'OFF'} for ${applied.length}/${keys.length} agents`
-                    + (Object.keys(failed).length ? ` (failed: ${Object.keys(failed).join(', ')})` : ''),
-                false
-            );
-            ctx.broadcast('router.master_toggle', { enabled: turnOn, applied });
-            ctx._sendJson(res, 200, {
-                ok: true,
-                enabled: turnOn,
-                applied,
-                failed: Object.keys(failed).length ? failed : undefined,
-                agents: ctx.agentOverrides.describeAll(),
-            });
+    if (pathname.startsWith('/api/scheduler/tasks/')) {
+        if (!ctx.scheduler) {
+            ctx._sendJson(res, 503, { error: 'Scheduler not configured' });
+            return true;
+        }
+        const id = decodeURIComponent(pathname.slice('/api/scheduler/tasks/'.length));
+        if (req.method === 'DELETE') {
+            ctx.db.deleteScheduledTask(id);
+            ctx.broadcast('scheduler.task_deleted', { id });
+            ctx._sendJson(res, 200, { ok: true });
+            return true;
+        }
+        if (req.method === 'PATCH' || req.method === 'POST') {
+            const body = await ctx._readBody(req);
+            const status = body.status === 'paused' ? 'paused' : 'active';
+            ctx.db.setScheduledTaskStatus(id, status);
+            ctx.broadcast('scheduler.task_updated', { id, status });
+            ctx._sendJson(res, 200, { ok: true, id, status });
             return true;
         }
     }
