@@ -862,6 +862,34 @@ class MissionControlServer {
                 return this._sendJson(res, 404, { error: 'Session not found' });
             }
 
+            if (pathname === '/api/meetings/save-notes' && req.method === 'POST') {
+                const body = await this._readBody(req);
+                const agentId = body?.agentId || 'hermes';
+                const provider = body?.provider || 'google';
+                const notes = body?.notes || [];
+                const meetUrl = body?.meetUrl || '';
+                
+                try {
+                    const userProfile = process.env.USERPROFILE || 'C:\\Users\\just2';
+                    const vaultDir = path.join(userProfile, 'Documents', 'ObsidianVault', 'Agentic OS', 'chats');
+                    if (!fs.existsSync(vaultDir)) fs.mkdirSync(vaultDir, { recursive: true });
+                    const today = new Date().toISOString().split('T')[0];
+                    const filePath = path.join(vaultDir, `Meeting-${agentId}-${today}.md`);
+                    
+                    let md = `# 🎥 Live Meeting Log — ${agentId.toUpperCase()} (${provider.toUpperCase()})\n\n`;
+                    md += `*Date: ${new Date().toLocaleString()}*\n`;
+                    if (meetUrl) md += `*Meeting URL: ${meetUrl}*\n\n`;
+                    md += `## Transcript & Discussion\n\n`;
+                    notes.forEach(n => {
+                        md += `**${n.speaker || 'Turn'}**: ${n.text}\n\n`;
+                    });
+                    fs.writeFileSync(filePath, md, 'utf8');
+                    return this._sendJson(res, 200, { ok: true, saved: true, path: filePath });
+                } catch(e) {
+                    return this._sendJson(res, 500, { ok: false, error: e.message });
+                }
+            }
+
             if (pathname === '/api/meetings/dispatch' && req.method === 'POST') {
                 const body = await this._readBody(req);
                 const provider = body.provider || 'daily';

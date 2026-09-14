@@ -387,7 +387,7 @@ async function saveProviderSettings() {
           <span class="text-xs font-bold text-amber-400">Google Meet</span>
         </div>
         <div class="flex items-center gap-2">
-          <a href="https://meet.google.com/new" target="_blank" style="color:#60a5fa;text-decoration:none;font-size:11px;background:#1e293b;border:1px solid #334155;border-radius:4px;padding:2px 8px">+ Open new Meet room ↗</a>
+          <button onclick="dispatchMeeting('google')" style="color:#60a5fa;background:#1e293b;border:1px solid #334155;border-radius:4px;padding:2px 8px;cursor:pointer;font-size:11px">+ Launch Meeting &amp; Copilot ↗</button>
           <span class="text-xs text-gray-500">Official Google Meet</span>
         </div>
       </div>
@@ -2574,6 +2574,31 @@ function endWarRoomStandup() {
   if (warRoomTimerInterval) clearInterval(warRoomTimerInterval);
   if (warRoomVisualizerAnim) cancelAnimationFrame(warRoomVisualizerAnim);
 
+  // Auto-save meeting transcript to Obsidian Second Brain
+  try {
+    const transcriptEl = document.getElementById('warroom-transcript');
+    if (transcriptEl && transcriptEl.children.length > 1) {
+      const notes = [];
+      Array.from(transcriptEl.children).forEach(ch => {
+        const text = (ch.innerText || ch.textContent || '').trim();
+        if (text && !text.includes('Council session initialized')) {
+          notes.push({ text });
+        }
+      });
+      if (notes.length > 0) {
+        fetch(BASE + '/api/meetings/save-notes?token=' + TOKEN, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            agentId: warRoomTargetAgent || 'hermes',
+            provider: 'google',
+            notes: notes
+          })
+        }).catch(err => console.warn('Obsidian save error:', err));
+      }
+    }
+  } catch(e) {}
+
   const overlay = document.getElementById('warroom-overlay');
   const modal = document.getElementById('warroom-modal');
   overlay.style.opacity = '0';
@@ -2818,8 +2843,41 @@ async function dispatchMeeting(provider) {
       body: JSON.stringify({ provider, agentId, meetUrl, mode, autoBrief })
     });
     const data = await res.json();
-    if (data.ok) {
-      alert('✓ ' + provider.toUpperCase() + ' meeting dispatched for agent ' + agentId + '!\\nRoom URL: ' + data.session.meetUrl);
+    if (data.ok && data.session) {
+      const targetUrl = data.session.meetUrl || meetUrl;
+      const agentObj = (typeof missionAgentsList !== 'undefined') ? missionAgentsList.find(a => a.id === agentId) : null;
+      const agentName = agentObj ? agentObj.name : (agentId.charAt(0).toUpperCase() + agentId.slice(1));
+      
+      // 1. Open meeting room in a new browser window/tab immediately
+      if (targetUrl) {
+        window.open(targetUrl, '_blank');
+      }
+
+      // 2. Open War Room HUD in Direct Meeting Mode
+      openWarRoomModal(false);
+      warRoomMode = 'direct';
+      selectWarRoomAgent(agentId);
+      setWarRoomMode('direct');
+
+      // 3. Customize HUD for Live Meeting
+      const titleEl = document.getElementById('warroom-modal-title');
+      if (titleEl) {
+        titleEl.innerHTML = '🎥 LIVE MEETING COPILOT &middot; ' + escapeHtml(agentName.toUpperCase()) + ' &middot; ' + escapeHtml(provider.toUpperCase());
+      }
+      const st = document.getElementById('warroom-speaker-status');
+      if (st) {
+        st.innerHTML = '🟢 ' + escapeHtml(agentName) + ' Active in Meeting &middot; Room: <a href="' + escapeHtml(targetUrl) + '" target="_blank" style="color:#60a5fa;text-decoration:underline">' + escapeHtml(targetUrl) + '</a>';
+      }
+
+      // 4. Agent verbal greeting & transcript introduction
+      const v = (typeof warRoomVoices !== 'undefined' && warRoomVoices[agentId]) || 'Charon';
+      const introText = "Hello! I am " + agentName + ". I have joined your " + provider.toUpperCase() + " meeting session. I am actively listening, recording notes, and standing by for your directives.";
+      addTranscriptLine(agentName, v, introText, 'agent');
+      speakText(introText, v, () => {
+        // Auto-start microphone listening so speech in the room is captured
+        toggleWarRoomMic();
+      });
+
       loadMeetingSessions();
       loadHiveMind();
     }
