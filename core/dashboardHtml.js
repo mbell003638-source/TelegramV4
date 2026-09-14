@@ -286,10 +286,16 @@ async function saveProviderSettings() {
     <h1 class="text-xl font-bold text-white">ClaudeClaw <span style="font-size:13px;font-weight:400;color:#6b7280">Mission Control</span></h1>
     <span id="device-badge" class="device-badge"></span>
   </div>
-  <div class="flex items-center gap-3">
-    <button onclick="openProviderSettingsModal()" style="background:#1e1e2e;color:#a78bfa;border:1px solid #3b3356;border-radius:8px;padding:4px 12px;font-size:12px;font-weight:600;display:flex;align-items:center;gap:6px;cursor:pointer">
+  <div class="flex items-center gap-2">
+    <button onclick="openKillSwitchesModal()" style="background:#1e1b4b;color:#a5b4fc;border:1px solid #3730a3;border-radius:8px;padding:4px 10px;font-size:12px;font-weight:600;display:flex;align-items:center;gap:4px;cursor:pointer">
+      🛡️ Kill Switches
+    </button>
+    <button onclick="openAuditLogDrawer()" style="background:#1f2937;color:#9ca3af;border:1px solid #374151;border-radius:8px;padding:4px 10px;font-size:12px;font-weight:600;display:flex;align-items:center;gap:4px;cursor:pointer">
+      📋 Audit Log
+    </button>
+    <button onclick="openProviderSettingsModal()" style="background:#1e1e2e;color:#a78bfa;border:1px solid #3b3356;border-radius:8px;padding:4px 10px;font-size:12px;font-weight:600;display:flex;align-items:center;gap:4px;cursor:pointer">
       <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
-      Providers & API Keys
+      Providers
     </button>
     <span id="last-updated" class="text-xs text-gray-500"></span>
     <button id="refresh-btn" onclick="refreshAll()" class="text-gray-400 hover:text-white transition">
@@ -318,6 +324,27 @@ async function saveProviderSettings() {
   <div class="summary-stat clickable-card" onclick="openMemoryDrawer()" style="cursor:pointer">
     <span class="summary-stat-val" id="sum-memories">-</span>
     <span class="summary-stat-label">Memories</span>
+  </div>
+  <div class="summary-stat clickable-card" onclick="openSuggestionsDrawer()" style="cursor:pointer">
+    <span class="summary-stat-val" id="sum-suggestions" style="color:#f59e0b">0</span>
+    <span class="summary-stat-label">Suggestions</span>
+  </div>
+</div>
+
+<!-- V3 Safety Posture Quick Bar -->
+<div id="v3-safety-hud" class="card mb-4" style="background:#0c0d15;border:1px solid #1e293b;padding:8px 14px;border-radius:10px">
+  <div class="flex flex-wrap items-center justify-between gap-2">
+    <div class="flex flex-wrap items-center gap-2">
+      <span style="font-size:14px">🛡️</span>
+      <span class="text-xs font-bold text-gray-300 uppercase tracking-wider">V3 Safety & Posture:</span>
+      <div id="v3-switches-quick" class="flex flex-wrap items-center gap-1.5">
+        <span class="pill" style="font-size:10px;background:#1e293b;color:#94a3b8">Loading switches...</span>
+      </div>
+    </div>
+    <div class="flex items-center gap-3">
+      <span id="v3-exfil-status" class="pill" style="font-size:10px;background:#064e3b;color:#6ee7b7;border:1px solid #065f46">DLP Active (6 Rules)</span>
+      <button onclick="openKillSwitchesModal()" class="text-xs text-blue-400 hover:text-blue-300 transition" style="background:none;border:none;cursor:pointer;text-decoration:underline">Configure</button>
+    </div>
   </div>
 </div>
 
@@ -777,6 +804,95 @@ async function saveProviderSettings() {
   <div class="drawer-body" id="history-body"></div>
   <div id="history-load-more" class="px-4 pb-4 hidden">
     <button onclick="loadMoreHistory()" class="w-full py-2 text-sm text-gray-400 bg-[#1a1a1a] border border-[#2a2a2a] rounded-lg hover:text-white transition">Load more</button>
+  </div>
+</div>
+
+<!-- Kill Switches Modal (ClaudeClaw V3 Pack 02) -->
+<div id="killswitches-overlay" style="position:fixed;inset:0;background:rgba(0,0,0,0.75);z-index:90;opacity:0;pointer-events:none;transition:opacity 0.2s"></div>
+<div id="killswitches-modal" style="position:fixed;top:50%;left:50%;transform:translate(-50%,-50%) scale(0.95);z-index:95;background:#10121d;border:1px solid #312e81;border-radius:14px;width:92%;max-width:640px;max-height:85vh;overflow-y:auto;opacity:0;pointer-events:none;transition:transform 0.2s ease,opacity 0.2s ease;box-shadow:0 12px 36px rgba(49,46,129,0.5)">
+  <div class="flex items-center justify-between px-5 py-4 border-b border-gray-800">
+    <div class="flex items-center gap-2">
+      <span style="font-size:20px">🛡️</span>
+      <h3 class="text-base font-bold text-white">ClaudeClaw V3 Kill Switches</h3>
+    </div>
+    <button onclick="closeKillSwitchesModal()" class="text-gray-400 hover:text-white" style="background:none;border:none;cursor:pointer;font-size:20px">&times;</button>
+  </div>
+  <div class="p-5 space-y-4 text-xs">
+    <p class="text-gray-400">Instantly halt or resume specific autonomous boundaries. Changes take effect immediately in memory and persist in <code>.env</code> across server restarts.</p>
+    
+    <div class="flex gap-2 mb-3">
+      <button onclick="emergencyKillAll()" style="background:#7f1d1d;color:#fca5a5;border:1px solid #991b1b;border-radius:8px;padding:6px 12px;font-weight:600;cursor:pointer">🛑 Emergency Kill All</button>
+      <button onclick="restoreAllSwitches()" style="background:#064e3b;color:#6ee7b7;border:1px solid #065f46;border-radius:8px;padding:6px 12px;font-weight:600;cursor:pointer">✅ Restore All Safe</button>
+    </div>
+
+    <div id="killswitches-cards" class="space-y-2">
+      <!-- Generated dynamically -->
+    </div>
+
+    <div class="pt-3 border-t border-gray-800 flex justify-end">
+      <button onclick="closeKillSwitchesModal()" style="background:#4f46e5;color:#fff;border:none;border-radius:8px;padding:6px 16px;font-weight:600;cursor:pointer">Done</button>
+    </div>
+  </div>
+</div>
+
+<!-- Audit Log & DLP Drawer (ClaudeClaw V3 Packs 03 & 07) -->
+<div id="audit-overlay" class="drawer-overlay" onclick="closeAuditLogDrawer()"></div>
+<div id="audit-drawer" class="drawer" style="max-height:90vh">
+  <div class="drawer-handle"></div>
+  <div class="flex items-center justify-between px-5 pt-3 pb-2 border-b border-gray-800">
+    <div class="flex items-center gap-2">
+      <span style="font-size:18px">📋</span>
+      <h3 class="text-base font-bold text-white">System Audit Log & Exfiltration Guard</h3>
+    </div>
+    <button onclick="closeAuditLogDrawer()" class="text-gray-500 hover:text-white text-xl leading-none">&times;</button>
+  </div>
+  <div class="flex items-center gap-2 px-5 py-2 bg-[#141414] border-b border-gray-800">
+    <button id="audit-tab-btn-logs" class="warroom-mode-pill active" onclick="switchAuditTab('logs')">📜 Event Audit Trail</button>
+    <button id="audit-tab-btn-exfil" class="warroom-mode-pill" onclick="switchAuditTab('exfil')">🛡️ DLP & Leak Scanner</button>
+    <button onclick="loadAuditLog()" class="ml-auto text-xs text-blue-400 hover:text-blue-300 transition" style="background:none;border:none;cursor:pointer">↻ Refresh</button>
+  </div>
+  <div class="drawer-body p-4" id="audit-drawer-body">
+    <div id="audit-section-logs">
+      <div id="audit-log-container" class="space-y-2">
+        <div class="text-gray-500 text-xs">Loading audit events...</div>
+      </div>
+    </div>
+    <div id="audit-section-exfil" style="display:none" class="space-y-4 text-xs">
+      <div class="p-3 bg-[#181818] border border-gray-800 rounded-lg">
+        <div class="font-bold text-gray-200 mb-1">Protected Leak Signatures</div>
+        <div class="text-gray-400 leading-relaxed">
+          Claude API Keys (<code>sk-ant-...</code>), OpenAI Keys (<code>sk-...</code>), Slack Tokens (<code>xoxb-...</code>), GitHub Tokens (<code>ghp_...</code>), AWS Access Keys (<code>AKIA...</code>), and Private RSA/EC Key blocks are actively scanned and automatically redacted from outgoing broadcasts.
+        </div>
+      </div>
+      <div class="p-3 bg-[#181818] border border-gray-800 rounded-lg">
+        <div class="font-bold text-gray-200 mb-2">Live DLP Scanner Test</div>
+        <textarea id="dlp-test-input" rows="2" placeholder="Paste test text with sensitive tokens (e.g. sk-ant-1234567890abcdefghijklmnopqrstuvwxyz)..." style="width:100%;background:#111;border:1px solid #333;border-radius:6px;padding:6px 10px;color:#fff;font-size:12px;outline:none;box-sizing:border-box"></textarea>
+        <div class="flex justify-between items-center mt-2">
+          <button onclick="testDlpScanner()" style="background:#2563eb;color:#fff;border:none;border-radius:6px;padding:6px 14px;font-weight:600;cursor:pointer">Scan Content</button>
+          <span id="dlp-test-status" class="text-xs"></span>
+        </div>
+        <div id="dlp-test-result" class="mt-3" style="display:none"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Suggestions Drawer (ClaudeClaw V3 Pack 04) -->
+<div id="suggestions-overlay" class="drawer-overlay" onclick="closeSuggestionsDrawer()"></div>
+<div id="suggestions-drawer" class="drawer" style="max-height:85vh">
+  <div class="drawer-handle"></div>
+  <div class="flex items-center justify-between px-5 pt-3 pb-2 border-b border-gray-800">
+    <div class="flex items-center gap-2">
+      <span style="font-size:18px">💡</span>
+      <h3 class="text-base font-bold text-white">V3 Swarm Intelligence Suggestions</h3>
+    </div>
+    <div class="flex items-center gap-2">
+      <button onclick="analyzeSuggestions()" style="background:#2563eb;color:#fff;border:none;border-radius:6px;padding:4px 10px;font-size:11px;font-weight:600;cursor:pointer">🔍 Analyze Swarm</button>
+      <button onclick="closeSuggestionsDrawer()" class="text-gray-500 hover:text-white text-xl leading-none">&times;</button>
+    </div>
+  </div>
+  <div class="drawer-body p-4" id="suggestions-container">
+    <div class="text-gray-500 text-xs">Loading suggestions...</div>
   </div>
 </div>
 
@@ -2934,6 +3050,295 @@ async function loadMeetingSessions() {
   } catch {}
 }
 
+// ── V3 Kill Switches & Safety HUD ─────────────────────────────────────────
+let currentSwitches = {};
+
+async function loadKillSwitches() {
+  try {
+    const res = await api('/api/killswitches');
+    if (res && res.switches) {
+      currentSwitches = res.switches;
+      renderQuickKillSwitches(res.switches);
+      renderKillSwitchesModalCards(res.switches);
+    }
+  } catch(e) { console.error('Failed to load kill switches:', e); }
+}
+
+function renderQuickKillSwitches(switches) {
+  var container = document.getElementById('v3-switches-quick');
+  if (!container) return;
+  var labels = {
+    LLM_SPAWN_ENABLED: 'LLM Spawn',
+    WARROOM_TEXT_ENABLED: 'WarRoom Text',
+    WARROOM_VOICE_ENABLED: 'Voice Standup',
+    DASHBOARD_MUTATIONS_ENABLED: 'Mutations',
+    MISSION_AUTO_ASSIGN_ENABLED: 'Auto-Assign',
+    SCHEDULER_ENABLED: 'Scheduler'
+  };
+  container.innerHTML = Object.entries(switches).map(function(entry) {
+    var k = entry[0];
+    var v = entry[1];
+    var bg = v ? '#064e3b' : '#7f1d1d';
+    var color = v ? '#6ee7b7' : '#fca5a5';
+    var border = v ? '#065f46' : '#991b1b';
+    var text = (labels[k] || k) + ': ' + (v ? 'ON' : 'PAUSED');
+    return '<button onclick="toggleKillSwitch(\'' + k + '\', ' + v + ')" class="pill" style="font-size:10px;background:' + bg + ';color:' + color + ';border:1px solid ' + border + ';cursor:pointer;padding:2px 6px;border-radius:4px" title="Click to toggle switch">' + text + '</button>';
+  }).join('');
+}
+
+function renderKillSwitchesModalCards(switches) {
+  var container = document.getElementById('killswitches-cards');
+  if (!container) return;
+  var descs = {
+    LLM_SPAWN_ENABLED: 'Gates all LLM API invocations (Claude, Codex, Grok, OpenRouter). When off, chat and auto-agents are paused.',
+    WARROOM_TEXT_ENABLED: 'Gates council deliberations (/discuss) and interactive War Room text responses.',
+    WARROOM_VOICE_ENABLED: 'Gates morning voice standup, browser TTS audio, and Google Meet dispatches.',
+    DASHBOARD_MUTATIONS_ENABLED: 'Gates task creation, edits, drag-and-drop reassignment, and status changes in Kanban.',
+    MISSION_AUTO_ASSIGN_ENABLED: 'Gates autonomous routing of tasks to specialized CLI agent instances.',
+    SCHEDULER_ENABLED: 'Gates background cron tasks and scheduled recurring jobs.'
+  };
+  container.innerHTML = Object.entries(switches).map(function(entry) {
+    var k = entry[0];
+    var v = entry[1];
+    var bg = v ? '#092518' : '#2b1014';
+    var border = v ? '#059669' : '#b91c1c';
+    var badgeBg = v ? '#047857' : '#dc2626';
+    var badgeText = v ? 'ACTIVE / ALLOWED' : 'PAUSED / BLOCKED';
+    var btnText = v ? 'Pause Switch' : 'Enable Switch';
+    var btnBg = v ? '#dc2626' : '#059669';
+    return '<div style="background:' + bg + ';border:1px solid ' + border + ';border-radius:8px;padding:10px" class="flex items-center justify-between gap-3">' +
+      '<div style="flex:1">' +
+        '<div class="flex items-center gap-2 mb-0.5">' +
+          '<span class="font-bold text-white font-mono">' + k + '</span>' +
+          '<span class="pill" style="font-size:9px;background:' + badgeBg + ';color:#fff">' + badgeText + '</span>' +
+        '</div>' +
+        '<div class="text-xs text-gray-400">' + (descs[k] || 'Safety switch gate') + '</div>' +
+      '</div>' +
+      '<button onclick="toggleKillSwitch(\'' + k + '\', ' + v + ')" style="background:' + btnBg + ';color:#fff;border:none;border-radius:6px;padding:6px 12px;font-size:11px;font-weight:600;cursor:pointer;white-space:nowrap">' +
+        btnText +
+      '</button>' +
+    '</div>';
+  }).join('');
+}
+
+async function toggleKillSwitch(switchName, currentVal) {
+  try {
+    const res = await fetch(BASE + '/api/killswitches?token=' + TOKEN, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ switchName, enabled: !currentVal })
+    });
+    const data = await res.json();
+    if (data.ok) {
+      loadKillSwitches();
+    }
+  } catch(e) { console.error('Toggle switch error:', e); }
+}
+
+async function emergencyKillAll() {
+  if (!confirm('Emergency Pause: This will immediately pause all LLM calls, voice standups, council discussions, mutations, and scheduler jobs. Proceed?')) return;
+  const paused = {
+    LLM_SPAWN_ENABLED: false,
+    WARROOM_TEXT_ENABLED: false,
+    WARROOM_VOICE_ENABLED: false,
+    DASHBOARD_MUTATIONS_ENABLED: false,
+    MISSION_AUTO_ASSIGN_ENABLED: false,
+    SCHEDULER_ENABLED: false
+  };
+  try {
+    await fetch(BASE + '/api/killswitches?token=' + TOKEN, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ switches: paused })
+    });
+    loadKillSwitches();
+  } catch(e) { console.error('Emergency kill error:', e); }
+}
+
+async function restoreAllSwitches() {
+  const safe = {
+    LLM_SPAWN_ENABLED: true,
+    WARROOM_TEXT_ENABLED: true,
+    WARROOM_VOICE_ENABLED: true,
+    DASHBOARD_MUTATIONS_ENABLED: true,
+    MISSION_AUTO_ASSIGN_ENABLED: true,
+    SCHEDULER_ENABLED: true
+  };
+  try {
+    await fetch(BASE + '/api/killswitches?token=' + TOKEN, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ switches: safe })
+    });
+    loadKillSwitches();
+  } catch(e) { console.error('Restore switches error:', e); }
+}
+
+function openKillSwitchesModal() {
+  loadKillSwitches();
+  document.getElementById('killswitches-overlay').style.opacity = '1';
+  document.getElementById('killswitches-overlay').style.pointerEvents = 'auto';
+  document.getElementById('killswitches-modal').style.opacity = '1';
+  document.getElementById('killswitches-modal').style.pointerEvents = 'auto';
+  document.getElementById('killswitches-modal').style.transform = 'translate(-50%, -50%) scale(1)';
+}
+
+function closeKillSwitchesModal() {
+  document.getElementById('killswitches-overlay').style.opacity = '0';
+  document.getElementById('killswitches-overlay').style.pointerEvents = 'none';
+  document.getElementById('killswitches-modal').style.opacity = '0';
+  document.getElementById('killswitches-modal').style.pointerEvents = 'none';
+  document.getElementById('killswitches-modal').style.transform = 'translate(-50%, -50%) scale(0.95)';
+}
+
+// ── V3 Audit Log & DLP Drawer ─────────────────────────────────────────────
+function openAuditLogDrawer() {
+  document.getElementById('audit-overlay').classList.add('open');
+  document.getElementById('audit-drawer').classList.add('open');
+  document.body.style.overflow = 'hidden';
+  loadAuditLog();
+}
+
+function closeAuditLogDrawer() {
+  document.getElementById('audit-overlay').classList.remove('open');
+  document.getElementById('audit-drawer').classList.remove('open');
+  document.body.style.overflow = '';
+}
+
+function switchAuditTab(tab) {
+  const isLogs = tab === 'logs';
+  document.getElementById('audit-tab-btn-logs').className = isLogs ? 'warroom-mode-pill active' : 'warroom-mode-pill';
+  document.getElementById('audit-tab-btn-exfil').className = !isLogs ? 'warroom-mode-pill active' : 'warroom-mode-pill';
+  document.getElementById('audit-section-logs').style.display = isLogs ? 'block' : 'none';
+  document.getElementById('audit-section-exfil').style.display = !isLogs ? 'block' : 'none';
+}
+
+async function loadAuditLog() {
+  var container = document.getElementById('audit-log-container');
+  if (!container) return;
+  try {
+    var res = await api('/api/audit-log?limit=50');
+    if (!res.logs || res.logs.length === 0) {
+      container.innerHTML = '<div class="text-gray-500 text-xs py-4 text-center">No audit events recorded yet. All system actions and safety checks log here.</div>';
+      return;
+    }
+    container.innerHTML = res.logs.map(function(log) {
+      var isBlocked = log.blocked === 1;
+      var statusBg = isBlocked ? '#7f1d1d' : '#064e3b';
+      var statusColor = isBlocked ? '#fca5a5' : '#6ee7b7';
+      var statusText = isBlocked ? 'BLOCKED' : 'ALLOWED';
+      var timeStr = new Date(log.created_at).toLocaleTimeString();
+      return '<div style="background:#181818;border:1px solid ' + (isBlocked ? '#991b1b' : '#2a2a2a') + ';border-radius:8px;padding:8px 12px" class="flex items-start justify-between gap-3">' +
+        '<div style="flex:1">' +
+          '<div class="flex items-center gap-2 mb-1">' +
+            '<span class="pill" style="font-size:9px;background:' + statusBg + ';color:' + statusColor + '">' + statusText + '</span>' +
+            '<span class="font-bold text-white font-mono text-xs">' + escapeHtml(log.action) + '</span>' +
+            '<span class="text-gray-500 text-xs">[' + escapeHtml(log.agent_id) + ']</span>' +
+            '<span class="text-gray-600 text-xs ml-auto">' + timeStr + '</span>' +
+          '</div>' +
+          '<div class="text-xs text-gray-300 font-mono break-all">' + escapeHtml(log.detail || '') + '</div>' +
+        '</div>' +
+      '</div>';
+    }).join('');
+  } catch(e) {
+    container.innerHTML = '<div class="text-red-400 text-xs">Failed to load audit logs.</div>';
+  }
+}
+
+async function testDlpScanner() {
+  var input = document.getElementById('dlp-test-input');
+  var status = document.getElementById('dlp-test-status');
+  var resultDiv = document.getElementById('dlp-test-result');
+  var text = (input ? input.value : '').trim();
+  if (!text) return;
+  status.textContent = 'Scanning...';
+  try {
+    var res = await fetch(BASE + '/api/exfil-guard?token=' + TOKEN, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: text })
+    });
+    var data = await res.json();
+    status.textContent = '';
+    resultDiv.style.display = 'block';
+    if (data.safe) {
+      resultDiv.innerHTML = '<div style="background:#064e3b;border:1px solid #065f46;border-radius:6px;padding:10px;color:#6ee7b7">Clean: No sensitive credentials or API keys detected. Content is safe for broadcast.</div>';
+    } else {
+      var matchNames = data.matches.map(function(m) { return m.name; }).join(', ');
+      resultDiv.innerHTML = '<div style="background:#450a0a;border:1px solid #991b1b;border-radius:6px;padding:10px;color:#fca5a5">' +
+        '<div class="font-bold mb-1">Sensitive Leaks Detected (' + escapeHtml(matchNames) + ')</div>' +
+        '<div class="text-xs text-gray-300 mb-2">The Exfiltration Guard will automatically redact these before external dispatch:</div>' +
+        '<pre class="bg-black/60 p-2 rounded text-xs text-emerald-400 whitespace-pre-wrap">' + escapeHtml(data.redactedContent) + '</pre>' +
+      '</div>';
+    }
+  } catch(e) {
+    status.textContent = 'Scan failed';
+  }
+}
+
+// ── V3 Suggestions Feature ────────────────────────────────────────────────
+function openSuggestionsDrawer() {
+  document.getElementById('suggestions-overlay').classList.add('open');
+  document.getElementById('suggestions-drawer').classList.add('open');
+  document.body.style.overflow = 'hidden';
+  loadSuggestions();
+}
+
+function closeSuggestionsDrawer() {
+  document.getElementById('suggestions-overlay').classList.remove('open');
+  document.getElementById('suggestions-drawer').classList.remove('open');
+  document.body.style.overflow = '';
+}
+
+async function loadSuggestions() {
+  var container = document.getElementById('suggestions-container');
+  var counter = document.getElementById('sum-suggestions');
+  try {
+    var res = await api('/api/suggestions');
+    var suggestions = res.suggestions || [];
+    if (counter) counter.textContent = suggestions.length;
+    if (!container) return;
+    if (suggestions.length === 0) {
+      container.innerHTML = '<div class="text-gray-500 text-xs py-8 text-center">No optimization suggestions currently. Click "Analyze Swarm" above to scan workload clustering.</div>';
+      return;
+    }
+    container.innerHTML = suggestions.map(function(s) {
+      var timeStr = timeAgo(s.created_at);
+      return '<div style="background:#181818;border:1px solid #2a2a2a;border-radius:10px;padding:12px;margin-bottom:8px">' +
+        '<div class="flex items-center justify-between mb-1">' +
+          '<span class="pill" style="font-size:9px;background:#312e81;color:#a5b4fc">' + escapeHtml(s.suggestion_type || 'intelligence') + '</span>' +
+          '<span class="text-gray-500 text-xs">' + timeStr + '</span>' +
+        '</div>' +
+        '<div class="text-sm font-semibold text-white mb-2">' + escapeHtml(s.summary) + '</div>' +
+        '<div class="flex justify-end gap-2">' +
+          '<button onclick="dismissSuggestion(\'' + s.id + '\')" style="background:#222;color:#9ca3af;border:1px solid #333;border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer">Dismiss</button>' +
+        '</div>' +
+      '</div>';
+    }).join('');
+  } catch(e) { console.error('Failed to load suggestions:', e); }
+}
+
+async function analyzeSuggestions() {
+  try {
+    const res = await fetch(BASE + '/api/suggestions/analyze?token=' + TOKEN, { method: 'POST' });
+    const data = await res.json();
+    if (data.ok) {
+      loadSuggestions();
+    }
+  } catch(e) { console.error('Analyze suggestions error:', e); }
+}
+
+async function dismissSuggestion(id) {
+  try {
+    await fetch(BASE + '/api/suggestions/dismiss?token=' + TOKEN, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id })
+    });
+    loadSuggestions();
+  } catch(e) { console.error('Dismiss suggestion error:', e); }
+}
+
 async function refreshAll() {
   const btn = document.getElementById('refresh-btn').querySelector('svg');
   btn.classList.add('refresh-spin');
@@ -2948,7 +3353,9 @@ async function refreshAll() {
     loadSummary(),
     loadMissionControl(),
     loadWarRoomVoices(),
-    loadMeetingSessions()
+    loadMeetingSessions(),
+    loadKillSwitches(),
+    loadSuggestions()
   ]);
   btn.classList.remove('refresh-spin');
   document.getElementById('last-updated').textContent = new Date().toLocaleTimeString();

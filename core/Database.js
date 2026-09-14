@@ -158,6 +158,18 @@ class AssistantDatabase {
                 created_at  INTEGER NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_audit_time ON audit_log(created_at DESC);
+
+            -- 10. Suggestions Feature (ClaudeClaw V3 Pack 04)
+            CREATE TABLE IF NOT EXISTS suggestions (
+                id              TEXT PRIMARY KEY,
+                agent_id        TEXT NOT NULL,
+                suggestion_type TEXT NOT NULL,
+                summary         TEXT NOT NULL,
+                details_json    TEXT,
+                dismissed_at    INTEGER,
+                created_at      INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_suggestions_agent ON suggestions(agent_id, created_at DESC);
         `);
     }
 
@@ -479,15 +491,42 @@ class AssistantDatabase {
 
     logAudit(agentId, chatId, action, detail = '', blocked = false) {
         const now = Date.now();
+        let detailStr = typeof detail === 'object' ? JSON.stringify(detail) : String(detail);
+        let isBlocked = blocked ? 1 : 0;
+        if (typeof blocked === 'object') {
+            detailStr += ' ' + JSON.stringify(blocked);
+            isBlocked = 1;
+        }
         const stmt = this.db.prepare(`
             INSERT INTO audit_log (agent_id, chat_id, action, detail, blocked, created_at)
             VALUES (?, ?, ?, ?, ?, ?)
         `);
-        stmt.run(agentId, chatId, action, detail, blocked ? 1 : 0, now);
+        stmt.run(agentId, chatId, action, detailStr, isBlocked, now);
     }
 
     getAuditLog(limit = 50) {
         return this.db.prepare('SELECT * FROM audit_log ORDER BY created_at DESC LIMIT ?').all(limit);
+    }
+
+    addSuggestion(id, agentId, type, summary, detailsJson = '{}') {
+        const now = Date.now();
+        const stmt = this.db.prepare(`
+            INSERT OR REPLACE INTO suggestions (id, agent_id, suggestion_type, summary, details_json, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+        `);
+        stmt.run(id, agentId, type, summary, typeof detailsJson === 'string' ? detailsJson : JSON.stringify(detailsJson), now);
+    }
+
+    getSuggestions(includeDismissed = false) {
+        if (includeDismissed) {
+            return this.db.prepare('SELECT * FROM suggestions ORDER BY created_at DESC').all();
+        }
+        return this.db.prepare('SELECT * FROM suggestions WHERE dismissed_at IS NULL ORDER BY created_at DESC').all();
+    }
+
+    dismissSuggestion(id) {
+        const now = Date.now();
+        this.db.prepare('UPDATE suggestions SET dismissed_at = ? WHERE id = ?').run(now, id);
     }
 }
 

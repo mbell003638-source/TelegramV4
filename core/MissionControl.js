@@ -14,6 +14,8 @@ const { globalAgentPool } = require('./AgentPool');
 const { globalSatelliteHub } = require('./SatelliteHub');
 const fs = require('fs');
 const path = require('path');
+const KillSwitches = require('./KillSwitches');
+const ExfiltrationGuard = require('./ExfiltrationGuard');
 
 class MissionControlServer {
     constructor({ database, sessionStore, actionExecutor, agents, port = 3141, token = null }) {
@@ -25,6 +27,8 @@ class MissionControlServer {
         this.token = token || process.env.DASHBOARD_TOKEN || 'admin';
         this.server = null;
         this.sseClients = new Set();
+        this.killSwitches = new KillSwitches(path.join(__dirname, '..'));
+        this.exfiltrationGuard = new ExfiltrationGuard(this.db);
 
         // Listen for EventBus events to broadcast via SSE
         this._wireEvents();
@@ -423,6 +427,10 @@ class MissionControlServer {
                 }
 
                 if (req.method === 'POST') {
+                    if (!this.killSwitches.isEnabled('DASHBOARD_MUTATIONS_ENABLED')) {
+                        this.db.logAudit('dashboard', 'mission_tasks', 'task_mutation_blocked', 'Task creation blocked by DASHBOARD_MUTATIONS_ENABLED switch', true);
+                        return this._sendJson(res, 403, { error: 'Dashboard mutations blocked by DASHBOARD_MUTATIONS_ENABLED kill switch' });
+                    }
                     const body = await this._readBody(req);
                     const task = this.db.createMissionTask({
                         title: body.title || 'Untitled Task',
@@ -473,6 +481,10 @@ class MissionControlServer {
                 }
 
                 if (req.method === 'PATCH') {
+                    if (!this.killSwitches.isEnabled('DASHBOARD_MUTATIONS_ENABLED')) {
+                        this.db.logAudit('dashboard', 'mission_tasks', 'task_mutation_blocked', 'Task update blocked by DASHBOARD_MUTATIONS_ENABLED switch', true);
+                        return this._sendJson(res, 403, { error: 'Dashboard mutations blocked by DASHBOARD_MUTATIONS_ENABLED kill switch' });
+                    }
                     const body = await this._readBody(req);
                     let task = null;
                     if (body.status) {
@@ -489,12 +501,20 @@ class MissionControlServer {
                 }
 
                 if (req.method === 'POST' && (parts[5] === 'cancel' || pathname.endsWith('/cancel'))) {
+                    if (!this.killSwitches.isEnabled('DASHBOARD_MUTATIONS_ENABLED')) {
+                        this.db.logAudit('dashboard', 'mission_tasks', 'task_mutation_blocked', 'Task cancel blocked by DASHBOARD_MUTATIONS_ENABLED switch', true);
+                        return this._sendJson(res, 403, { error: 'Dashboard mutations blocked by DASHBOARD_MUTATIONS_ENABLED kill switch' });
+                    }
                     const task = this.db.updateMissionTaskStatus(taskId, 'cancelled');
                     this.broadcast('mission.task_updated', task);
                     return this._sendJson(res, 200, { ok: true, task });
                 }
 
                 if (req.method === 'DELETE') {
+                    if (!this.killSwitches.isEnabled('DASHBOARD_MUTATIONS_ENABLED')) {
+                        this.db.logAudit('dashboard', 'mission_tasks', 'task_mutation_blocked', 'Task delete blocked by DASHBOARD_MUTATIONS_ENABLED switch', true);
+                        return this._sendJson(res, 403, { error: 'Dashboard mutations blocked by DASHBOARD_MUTATIONS_ENABLED kill switch' });
+                    }
                     this.db.deleteMissionTask(taskId);
                     this.broadcast('mission.task_deleted', { id: taskId });
                     return this._sendJson(res, 200, { success: true });
@@ -744,6 +764,88 @@ class MissionControlServer {
                 }
             }
 
+            // 7c. Kill Switches (ClaudeClaw V3 Pack 02)
+            if (pathname === '/api/killswitches') {
+                if (req.method === 'GET') {
+                    return this._sendJson(res, 200, { switches: this.killSwitches.getAll() });
+                }
+                if (req.method === 'POST') {
+                    const body = await this._readBody(req);
+                    if (body.switches && typeof body.switches === 'object') {
+                        for (const [k, v] of Object.entries(body.switches)) {
+                            this.killSwitches.set(k, v);
+                        }
+                    } else if (body.switchName) {
+                        this.killSwitches.set(body.switchName, body.enabled);
+                    }
+                    const updated = this.killSwitches.getAll();
+                    this.db.logAudit('admin', 'system', 'killswitch_toggle', JSON.stringify(body), false);
+                    this.broadcast('killswitches.updated', updated);
+                    return this._sendJson(res, 200, { ok: true, switches: updated });
+                }
+            }
+
+            // 7d. Audit Log (ClaudeClaw V3 Pack 03)
+            if (pathname === '/api/audit-log') {
+                if (req.method === 'GET') {
+                    const limit = Number(query.limit) || 100;
+                    const logs = this.db.getAuditLog(limit);
+                    return this._sendJson(res, 200, { logs });
+                }
+                if (req.method === 'POST') {
+                    const body = await this._readBody(req);
+                    this.db.logAudit(body.agentId || 'admin', body.chatId || 'dashboard', body.action || 'custom_event', body.detail || '', body.blocked || false);
+                    return this._sendJson(res, 200, { ok: true });
+                }
+            }
+
+            // 7e. Suggestions Feature (ClaudeClaw V3 Pack 04)
+            if (pathname === '/api/suggestions') {
+                if (req.method === 'GET') {
+                    const includeDismissed = query.includeDismissed === 'true';
+                    const suggestions = this.db.getSuggestions(includeDismissed);
+                    return this._sendJson(res, 200, { suggestions });
+                }
+            }
+
+            if (pathname === '/api/suggestions/dismiss' && req.method === 'POST') {
+                const body = await this._readBody(req);
+                if (body.id) {
+                    this.db.dismissSuggestion(body.id);
+                    this.broadcast('suggestions.dismissed', { id: body.id });
+                    return this._sendJson(res, 200, { ok: true });
+                }
+                return this._sendJson(res, 400, { error: 'Suggestion id required' });
+            }
+
+            if (pathname === '/api/suggestions/analyze' && req.method === 'POST') {
+                const suggestions = await this._analyzeSuggestions();
+                return this._sendJson(res, 200, { ok: true, suggestions });
+            }
+
+            // 7f. Exfiltration Guard (ClaudeClaw V3 Pack 07)
+            if (pathname === '/api/exfil-guard') {
+                if (req.method === 'GET') {
+                    return this._sendJson(res, 200, {
+                        ok: true,
+                        status: 'active',
+                        protectedPatterns: [
+                            'Claude API Key (sk-ant-...)',
+                            'OpenAI API Key (sk-...)',
+                            'Slack Token (xoxb/xoxp/...)',
+                            'GitHub Token (ghp/gho/...)',
+                            'AWS Access Key (AKIA...)',
+                            'Private Key Block (RSA/EC/OPENSSH)'
+                        ]
+                    });
+                }
+                if (req.method === 'POST') {
+                    const body = await this._readBody(req);
+                    const testResult = this.exfiltrationGuard.scanForLeaks(body.text || '');
+                    return this._sendJson(res, 200, testResult);
+                }
+            }
+
             // 8. War Room Voice Settings (Gemini Live / Cartesia)
             if (pathname === '/api/warroom/voices') {
                 if (req.method === 'GET') {
@@ -774,6 +876,10 @@ class MissionControlServer {
             }
 
             if (pathname === '/api/warroom/standup' && req.method === 'POST') {
+                if (!this.killSwitches.isEnabled('WARROOM_VOICE_ENABLED')) {
+                    this.db.logAudit('warroom', 'standup', 'voice_standup_blocked', 'Voice standup blocked by WARROOM_VOICE_ENABLED switch', true);
+                    return this._sendJson(res, 403, { ok: false, error: 'Voice standup blocked: WARROOM_VOICE_ENABLED kill switch is active.' });
+                }
                 const sessionId = `standup_${Date.now()}`;
                 this.db.recordHiveMind('system', 'war_room', 'standup_started', 'Voice standup meeting convened with agent swarm.');
                 this.broadcast('warroom.standup_started', { sessionId, timestamp: Date.now() });
@@ -783,6 +889,10 @@ class MissionControlServer {
 
             // 8c. War Room Council Deliberation (/discuss)
             if (pathname === '/api/warroom/discuss' && req.method === 'POST') {
+                if (!this.killSwitches.isEnabled('WARROOM_TEXT_ENABLED')) {
+                    this.db.logAudit('warroom', 'discuss', 'warroom_text_blocked', 'Council deliberation blocked by WARROOM_TEXT_ENABLED switch', true);
+                    return this._sendJson(res, 403, { ok: false, error: 'Council deliberation blocked: WARROOM_TEXT_ENABLED kill switch is active.' });
+                }
                 const body = await this._readBody(req);
                 const question = (body.question || body.message || '').trim();
                 if (!question) {
@@ -794,6 +904,10 @@ class MissionControlServer {
 
             // 8d. War Room Standup Interactive Speech & Message
             if (pathname === '/api/warroom/message' && req.method === 'POST') {
+                if (!this.killSwitches.isEnabled('WARROOM_TEXT_ENABLED')) {
+                    this.db.logAudit('warroom', 'message', 'warroom_text_blocked', 'War room message blocked by WARROOM_TEXT_ENABLED switch', true);
+                    return this._sendJson(res, 403, { ok: false, error: 'War Room message blocked: WARROOM_TEXT_ENABLED kill switch is active.' });
+                }
                 const body = await this._readBody(req);
                 const userMsg = (body.message || '').trim();
                 const mode = body.mode || 'direct';
@@ -891,6 +1005,10 @@ class MissionControlServer {
             }
 
             if (pathname === '/api/meetings/dispatch' && req.method === 'POST') {
+                if (!this.killSwitches.isEnabled('WARROOM_VOICE_ENABLED')) {
+                    this.db.logAudit('live_meetings', 'dispatch', 'meeting_dispatch_blocked', 'Meeting dispatch blocked by WARROOM_VOICE_ENABLED switch', true);
+                    return this._sendJson(res, 403, { ok: false, error: 'Meeting dispatch blocked: WARROOM_VOICE_ENABLED kill switch is active.' });
+                }
                 const body = await this._readBody(req);
                 const provider = body.provider || 'daily';
                 const agentId = body.agentId || 'claude';
@@ -957,11 +1075,28 @@ class MissionControlServer {
             // 10. Chat Send (Dashboard Web Chat)
             if (pathname === '/api/chat/send' && req.method === 'POST') {
                 const body = await this._readBody(req);
-                const text = (body.message || body.text || '').trim();
+                let text = (body.message || body.text || '').trim();
                 const targetChatId = body.chatId || query.chatId || 'dashboard_chat';
                 const agentKey = (body.agentId && body.agentId !== 'all')
                     ? body.agentId
                     : (this.sessionStore?.getActiveAgent(targetChatId) || 'antigravity');
+
+                // 1. Gated by LLM_SPAWN_ENABLED Kill Switch
+                if (!this.killSwitches.isEnabled('LLM_SPAWN_ENABLED')) {
+                    this.db.logAudit(agentKey, targetChatId, 'llm_spawn_blocked', 'Chat send blocked by LLM_SPAWN_ENABLED switch', true);
+                    return this._sendJson(res, 403, { ok: false, error: 'LLM execution paused: LLM_SPAWN_ENABLED kill switch is active.' });
+                }
+
+                // 2. Outbound Data Loss Prevention (Exfiltration Guard)
+                const exfilScan = this.exfiltrationGuard.scanForLeaks(text);
+                if (!exfilScan.safe) {
+                    text = exfilScan.redactedContent;
+                    this.db.logAudit(agentKey, targetChatId, 'exfil_intercepted', `Sensitive credentials auto-redacted: ${exfilScan.matches.map(m => m.name).join(', ')}`, true);
+                    this.broadcast('chat.warning', { message: `Sensitive credentials detected and redacted by Exfiltration Guard: ${exfilScan.matches.map(m => m.name).join(', ')}` });
+                } else {
+                    this.db.logAudit(agentKey, targetChatId, 'chat_send', text.slice(0, 100), false);
+                }
+
                 if (agentKey) {
                     this.sessionStore?.setActiveAgent(agentKey, targetChatId);
                 }
@@ -1340,6 +1475,61 @@ class MissionControlServer {
                 text: consolidatorReply
             }
         };
+    }
+
+    async _analyzeSuggestions() {
+        const agentKeys = Object.keys(this.agents || {});
+        const turnMap = {};
+        for (const key of agentKeys) {
+            const usage = this.db.getUsage ? this.db.getUsage(key) : null;
+            turnMap[key] = Number(usage?.totalRequests || 0);
+        }
+
+        const counts = Object.values(turnMap).sort((a, b) => a - b);
+        const median = counts.length ? counts[Math.floor(counts.length / 2)] : 0;
+
+        let added = 0;
+        for (const [key, count] of Object.entries(turnMap)) {
+            if (count >= 5 && count > (median * 2)) {
+                const id = `sugg_overload_${key}_${Date.now()}`;
+                const name = this.agents[key]?.name || key;
+                this.db.addSuggestion(
+                    id,
+                    key,
+                    'agent_overload',
+                    `Agent Overload: ${name} has handled ${count} turns (${(count / (median || 1)).toFixed(1)}x swarm median). Consider offloading code tasks to Codex or research to Hermes.`,
+                    { turns: count, median }
+                );
+                added++;
+            }
+        }
+
+        const tasks = (this.db.getMissionTasks ? this.db.getMissionTasks() : []) || [];
+        const failedTasks = tasks.filter(t => t.status === 'failed');
+        if (failedTasks.length > 0) {
+            const id = `sugg_failures_${Date.now()}`;
+            this.db.addSuggestion(
+                id,
+                'system',
+                'task_recovery',
+                `Task Recovery: ${failedTasks.length} mission task(s) encountered execution errors. Retry with Codex or Antigravity under elevated priority.`,
+                { failedCount: failedTasks.length }
+            );
+            added++;
+        }
+
+        const existing = this.db.getSuggestions ? this.db.getSuggestions() : [];
+        if (existing.length === 0) {
+            this.db.addSuggestion(
+                `sugg_nominal_${Date.now()}`,
+                'system',
+                'swarm_optimization',
+                'Swarm Nominal: All 8 specialized CLI adapters are active with balanced workload. Use War Room /discuss for complex multi-agent deliberation.',
+                { status: 'optimal' }
+            );
+        }
+
+        return this.db.getSuggestions();
     }
 }
 
