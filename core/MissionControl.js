@@ -16,6 +16,7 @@ const fs = require('fs');
 const path = require('path');
 const KillSwitches = require('./KillSwitches');
 const ExfiltrationGuard = require('./ExfiltrationGuard');
+const { getDeviceAutomation } = require('./DeviceAutomation');
 
 class MissionControlServer {
     constructor({ database, sessionStore, actionExecutor, agents, port = 3141, token = null }) {
@@ -29,6 +30,7 @@ class MissionControlServer {
         this.sseClients = new Set();
         this.killSwitches = new KillSwitches(path.join(__dirname, '..'));
         this.exfiltrationGuard = new ExfiltrationGuard(this.db);
+        this.deviceAutomation = getDeviceAutomation();
 
         // Listen for EventBus events to broadcast via SSE
         this._wireEvents();
@@ -368,6 +370,63 @@ class MissionControlServer {
                 const agentId = pathname.split('/')[3];
                 const usage = this.db?.getUsage(agentId) || { inputTokens: 0, outputTokens: 0, turns: 0, costUsd: 0 };
                 return this._sendJson(res, 200, usage);
+            }
+
+            // 2h. The Hands — Android ADB Device Automation Hub
+            if (pathname === '/api/devices' && req.method === 'GET') {
+                const adbInstalled = this.deviceAutomation.isAdbAvailable();
+                const devices = await this.deviceAutomation.listDevices();
+                const quickApps = this.deviceAutomation.getQuickApps();
+                return this._sendJson(res, 200, {
+                    ok: true,
+                    adbInstalled,
+                    adbPath: this.deviceAutomation.adbPath,
+                    devices,
+                    selectedDevice: this.deviceAutomation.selectedDevice,
+                    quickApps,
+                });
+            }
+
+            if (pathname === '/api/devices/screenshot' && req.method === 'GET') {
+                try {
+                    const serial = query.serial || null;
+                    const dataUrl = await this.deviceAutomation.captureScreenshot(serial);
+                    return this._sendJson(res, 200, { ok: true, screenshot: dataUrl });
+                } catch (err) {
+                    return this._sendJson(res, 500, { ok: false, error: err.message });
+                }
+            }
+
+            if (pathname === '/api/devices/action' && (req.method === 'POST' || req.method === 'PATCH')) {
+                try {
+                    const body = await this._readBody(req);
+                    const { action, x, y, x1, y1, x2, y2, duration, text, keyCode, package: pkg, serial } = body;
+
+                    let result = null;
+                    switch (action) {
+                        case 'tap':
+                            result = await this.deviceAutomation.tap(x, y, serial);
+                            break;
+                        case 'swipe':
+                            result = await this.deviceAutomation.swipe(x1, y1, x2, y2, duration, serial);
+                            break;
+                        case 'type':
+                            result = await this.deviceAutomation.inputText(text, serial);
+                            break;
+                        case 'key':
+                            result = await this.deviceAutomation.pressKey(keyCode, serial);
+                            break;
+                        case 'launch':
+                            result = await this.deviceAutomation.launchApp(pkg, serial);
+                            break;
+                        default:
+                            return this._sendJson(res, 400, { ok: false, error: `Unknown action: ${action}` });
+                    }
+                    this.broadcast('device.action', { action, serial, result });
+                    return this._sendJson(res, 200, { ok: true, action, result });
+                } catch (err) {
+                    return this._sendJson(res, 500, { ok: false, error: err.message });
+                }
             }
 
             // 2f. Chat History & Conversation (Unified multi-agent conversation stream)
