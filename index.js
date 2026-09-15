@@ -110,6 +110,11 @@ const TaskPlanner = require('./core/TaskPlanner');
 const SelfImprovementEngine = require('./core/SelfImprovement');
 const UpstreamWatch = require('./core/UpstreamWatch');
 const SyncthingBridge = require('./core/SyncthingBridge');
+const AgentDelegation = require('./core/AgentDelegation');
+const Council = require('./core/Council');
+const InstanceSync = require('./core/InstanceSync');
+const SkillRegistry = require('./core/SkillRegistry');
+const { globalHermesEngine } = require('./core/HermesToolEngine');
 const { runImprovement, IMPROVE_AGENT_ID } = require('./core/RouterRoutes');
 
 // Agent implementations
@@ -219,6 +224,37 @@ async function main() {
     }
     const syncthing = new SyncthingBridge({ apiKey: syncthingKey });
 
+    // 4g. Agent-to-agent delegation. The inter_agent_tasks table existed but
+    //     nothing ever read or wrote it, so one agent could not hand work to
+    //     another. Depth and cycle guards keep A->B->A from looping forever.
+    const delegation = new AgentDelegation({
+        database,
+        agents,
+        actionExecutor,
+    });
+
+    // 4h. Council: pose a question to several agents and synthesise their real
+    //     positions. Replaces a deleted module that returned hardcoded prose
+    //     as if it were genuine agent output.
+    const council = new Council({
+        agents,
+        actionExecutor,
+        router: providerRouter,
+        database,
+    });
+
+    // 4i. Skills: reusable procedures, shareable between agents and machines.
+    const skills = new SkillRegistry({ baseDir: config.baseDir, database });
+
+    // 4j. Opt-in sharing of memories/skills/config with other instances.
+    //     Nothing is shared until a peer is added WITH explicit scopes.
+    const instanceSync = new InstanceSync({
+        database,
+        baseDir: config.baseDir,
+        selfId: process.env.INSTANCE_ID || null,
+        sharedSecret: process.env.INSTANCE_SHARED_SECRET || null,
+    });
+
     const dashboardPort = Number(process.env.DASHBOARD_PORT) || 3141;
     const dashboardToken = process.env.DASHBOARD_TOKEN || 'admin';
     const missionControl = new MissionControlServer({
@@ -236,6 +272,10 @@ async function main() {
         selfImprovement,
         upstreamWatch,
         syncthing,
+        delegation,
+        council,
+        instanceSync,
+        skills,
     });
     await missionControl.start().catch((err) => {
         console.warn(`[MissionControl] Could not bind port ${dashboardPort}: ${err.message}`);
@@ -279,6 +319,21 @@ async function main() {
     // Attached after construction because the scheduler needs
     // missionControl's kill switches.
     missionControl.scheduler = scheduler;
+    council.killSwitches = missionControl.killSwitches;
+
+    // The Hermes tool engine was previously referenced only from a test file.
+    // Wire its orchestration tools to the real collaborators. Each agent CLI
+    // keeps its own native toolset; these are the tools that only make sense
+    // at the layer above them.
+    if (typeof globalHermesEngine.configure === 'function') {
+        globalHermesEngine.configure({
+            memorySearch,
+            database,
+            delegation,
+            skills,
+            agents,
+        });
+    }
 
     // The improvement sweep is not an agent prompt, so it gets its own
     // handler on the same cron machinery.
@@ -340,6 +395,8 @@ async function main() {
     console.log(`   Memory recall: ${memorySearch.stats().mode} (${memorySearch.stats().indexed} indexed)`);
     console.log('   Scheduler: running');
     console.log(`   Syncthing: ${syncthing.isConfigured ? 'configured' : 'not configured (set SYNCTHING_API_KEY)'}`);
+    console.log(`   Skills: ${skills.stats().count} registered`);
+    console.log(`   Peers: ${instanceSync.listPeers().length} instance(s) paired`);
 
     // Stop the scheduler cleanly so an in-flight task is not orphaned.
     for (const sig of ['SIGINT', 'SIGTERM']) {
