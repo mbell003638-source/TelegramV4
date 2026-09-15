@@ -33,16 +33,25 @@ const AGENT_ENV_MAP = {
     hermes:      { baseUrl: ['OPENAI_BASE_URL'],    apiKey: ['OPENAI_API_KEY'],    model: ['HERMES_MODEL'] },
     pi:          { baseUrl: ['OPENAI_BASE_URL'],    apiKey: ['OPENAI_API_KEY'] },
     openclaw:    { baseUrl: ['OPENAI_BASE_URL'],    apiKey: ['OPENAI_API_KEY'] },
+    // agy (Gemini CLI) has no documented base-url env — GEMINI_BASE_URL /
+    // GOOGLE_GEMINI_BASE_URL are not honoured — so this agent cannot be
+    // pointed at the gateway. Only apiKey overlay is supported.
     antigravity: { apiKey: ['GEMINI_API_KEY', 'GOOGLE_API_KEY'] },
 };
 
 const ROLES = ['baseUrl', 'apiKey', 'model'];
 
-// Fixed env vars set alongside an override, per agent. Claude Code >= 2.1.129
-// uses gateway discovery to pull GET /v1/models into its own /model picker,
-// so every routed model shows up inside the CLI once the toggle is on.
+// Fixed env vars applied alongside an override. `null` means delete that key
+// from the spawn env (see BaseAgent.getSpawnEnv). Claude Code maps
+// ANTHROPIC_API_KEY → X-Api-Key and ANTHROPIC_AUTH_TOKEN → Authorization:
+// Bearer; setting both is an auth conflict, so the API key is unset while
+// the toggle is on. Claude Code >= 2.1.129 uses gateway discovery to pull
+// GET /v1/models into its own /model picker.
 const AGENT_ENV_CONSTANTS = {
-    claude: { CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY: '1' },
+    claude: {
+        CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY: '1',
+        ANTHROPIC_API_KEY: null,
+    },
 };
 
 /** Repo-standard secret mask: first 7 + '...' + last 4. */
@@ -239,7 +248,8 @@ class AgentOverrides {
     /**
      * CORE METHOD — the env vars to merge into the child process env at spawn
      * time. `{}` when the toggle is off, so the agent keeps its default.
-     * Never contains undefined/empty values.
+     * Never contains undefined or empty-string values. A value of `null`
+     * means delete that key from the spawn env (do not set '').
      */
     getEnvOverlay(agentKey) {
         const overlay = {};
@@ -257,7 +267,7 @@ class AgentOverrides {
             }
             if (Object.keys(overlay).length) {
                 for (const [name, value] of Object.entries(AGENT_ENV_CONSTANTS[agentKey] || {})) {
-                    overlay[name] = String(value);
+                    overlay[name] = value === null ? null : String(value);
                 }
                 overlay[MARKER_VAR] = '1';
             }

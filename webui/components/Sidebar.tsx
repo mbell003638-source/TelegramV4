@@ -14,6 +14,7 @@ import {
   Sparkles,
   Zap,
   Smartphone,
+  Satellite,
   Globe,
   MessageSquare,
   Trash2
@@ -323,6 +324,23 @@ export default function Sidebar() {
               </div>
               <span className="text-[10px] bg-amber-950/60 text-amber-300 border border-amber-800/40 px-1.5 py-0.5 rounded-md font-mono">
                 ULTRON
+              </span>
+            </Link>
+
+            <Link
+              href="/satellites"
+              className={`flex items-center justify-between px-3 py-2 rounded-xl text-xs font-semibold transition-all ${
+                pathname === '/satellites'
+                  ? 'bg-blue-600/15 text-sky-400 border border-blue-500/30 shadow-[0_0_15px_rgba(59,130,246,0.15)]'
+                  : 'text-gray-400 hover:text-white hover:bg-white/[0.04]'
+              }`}
+            >
+              <div className="flex items-center gap-2.5">
+                <Satellite className="w-4 h-4 text-cyan-400" />
+                <span>Satellites</span>
+              </div>
+              <span className="text-[10px] bg-cyan-950/60 text-cyan-300 border border-cyan-800/40 px-1.5 py-0.5 rounded-md font-mono">
+                VPS
               </span>
             </Link>
 

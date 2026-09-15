@@ -38,6 +38,7 @@ class BaseAgent {
     /**
      * Build the env for a spawned CLI subprocess.
      * Merge order: process.env  ←  extra  ←  provider override overlay.
+     * Overlay values of `null` delete that key after spreading (never '').
      * The overlay is `{}` when the toggle is off, so the agent keeps exactly
      * its default env. Never throws — falls back to `{ ...process.env, ...extra }`.
      */
@@ -45,8 +46,12 @@ class BaseAgent {
         const base = { ...process.env, ...(extra || {}) };
         try {
             const { getAgentOverrides } = require('./AgentOverrides');
-            const overlay = getAgentOverrides().getEnvOverlay(this.key);
-            return { ...base, ...overlay };
+            const overlay = getAgentOverrides().getEnvOverlay(this.key) || {};
+            const env = { ...base, ...overlay };
+            for (const [k, v] of Object.entries(overlay)) {
+                if (v === null) delete env[k];
+            }
+            return env;
         } catch (err) {
             console.warn(`[BaseAgent] Failed to apply override overlay for ${this.key}:`, err.message);
             return base;

@@ -47,7 +47,14 @@ const NEW_TOOLS = [
     'delegate_to_agent',
     'list_skills',
     'use_skill',
+    'cron',
+    'device',
+    'syncthing',
+    'meeting',
+    'goal',
 ];
+
+const EXPECTED_TOOL_COUNT = 14; // bash, read_file, write_file + NEW_TOOLS
 
 // --- registration ------------------------------------------------------------
 
@@ -80,6 +87,16 @@ test('orchestration tools are registered alongside the original three', () => {
     assert.deepEqual(byName.use_skill.parameters.required, ['skill']);
     assert.deepEqual(byName.list_agents.parameters.required, []);
     assert.deepEqual(byName.list_skills.parameters.required, []);
+    assert.deepEqual(byName.cron.parameters.required, []);
+    assert.deepEqual(byName.device.parameters.required, []);
+    assert.deepEqual(byName.syncthing.parameters.required, []);
+    assert.deepEqual(byName.meeting.parameters.required, []);
+    assert.deepEqual(byName.goal.parameters.required, []);
+    assert.match(byName.goal.description, /goal/i);
+    for (const action of ['create', 'list', 'step', 'status', 'abandon', 'resume']) {
+        assert.match(byName.goal.parameters.properties.action.description, new RegExp(action));
+    }
+    assert.equal(defs.length, EXPECTED_TOOL_COUNT);
 });
 
 // --- memory ------------------------------------------------------------------
@@ -489,19 +506,24 @@ test('new write/act tools are guarded against laundered destructive payloads', a
 test('the engine constructs with no dependencies injected at all', async () => {
     // The original zero-argument construction other code and tests rely on.
     const engine = new HermesToolEngine();
-    assert.equal(engine.getToolDefinitions().length, 9);
+    assert.equal(engine.getToolDefinitions().length, EXPECTED_TOOL_COUNT);
 
     // The process-wide singleton loads unwired and stays that way until index.js
     // calls configure() — so requiring this module never needs the DB, the
     // memory index, the delegation router or the skill registry to exist.
     assert.ok(globalHermesEngine instanceof HermesToolEngine);
-    assert.equal(globalHermesEngine.getToolDefinitions().length, 9);
+    assert.equal(globalHermesEngine.getToolDefinitions().length, EXPECTED_TOOL_COUNT);
     const status = globalHermesEngine.getDependencyStatus();
     assert.equal(status.memorySearch, false);
     assert.equal(status.database, false);
     assert.equal(status.delegation, false);
     assert.equal(status.skills, false);
     assert.equal(status.agents, false);
+    assert.equal(status.scheduler, false);
+    assert.equal(status.devices, false);
+    assert.equal(status.syncthing, false);
+    assert.equal(status.meetingBot, false);
+    assert.equal(status.goalEngine, false);
     // Guardrails are always present by default.
     assert.equal(status.approvalGate, true);
     assert.equal(status.loopGuard, true);
@@ -514,6 +536,11 @@ test('the engine constructs with no dependencies injected at all', async () => {
         ['delegate_to_agent', { toAgent: 'codex', prompt: 'x' }, /delegation not configured/],
         ['list_skills', {}, /skills not configured/],
         ['use_skill', { skill: 'x' }, /skills not configured/],
+        ['cron', { action: 'list' }, /scheduler not configured/],
+        ['device', { action: 'list' }, /device automation not configured/],
+        ['syncthing', { action: 'status' }, /syncthing not configured/],
+        ['meeting', { action: 'list' }, /meeting bot not configured/],
+        ['goal', { action: 'list' }, /goal engine not configured/],
     ];
     for (const [name, args, pattern] of expectations) {
         const payload = readResponse(await engine.executeTool(
@@ -553,4 +580,332 @@ test('configure() wires dependencies after construction and can unwire them', as
     }, { chatId: freshChat('configure-off'), agentId: 'hermes' }));
     assert.equal(off.status, 'error');
     assert.match(off.error, /delegation not configured/);
+});
+
+// --- cron / device / syncthing / meeting ------------------------------------
+
+test('cron lists, creates and cancels through the injected scheduler', async () => {
+    const calls = [];
+    const engine = new HermesToolEngine({
+        scheduler: {
+            listTasks(chatId) {
+                calls.push({ op: 'list', chatId });
+                return [{ id: 'sched_1', chat_id: chatId, agent_id: 'claude', prompt: 'standup', schedule: '0 9 * * 1-5', next_run: 1, status: 'active' }];
+            },
+            scheduleTask(spec) {
+                calls.push({ op: 'create', spec });
+                return { id: 'sched_2', ...spec, next_run: 99, status: 'active' };
+            },
+            cancelTask(id) {
+                calls.push({ op: 'cancel', id });
+                return { cancelled: true, id };
+            },
+        },
+    });
+    const chatId = freshChat('cron');
+
+    const listed = readData(await engine.executeTool(
+        { name: 'cron', arguments: { action: 'list' } },
+        { chatId },
+    ));
+    assert.equal(listed.count, 1);
+    assert.equal(listed.tasks[0].id, 'sched_1');
+    assert.equal(listed.tasks[0].agentId, 'claude');
+    assert.equal(calls[0].chatId, chatId);
+
+    const created = readData(await engine.executeTool({
+        name: 'cron',
+        arguments: { action: 'create', schedule: '0 9 * * 1-5', prompt: 'Daily standup digest' },
+    }, { chatId, agentId: 'hermes' }));
+    assert.equal(created.created, true);
+    assert.equal(created.task.id, 'sched_2');
+    assert.equal(calls[1].spec.agentId, 'hermes');
+    assert.equal(calls[1].spec.schedule, '0 9 * * 1-5');
+
+    const cancelled = readData(await engine.executeTool({
+        name: 'cron',
+        arguments: { action: 'cancel', taskId: 'sched_2' },
+    }, { chatId }));
+    assert.equal(cancelled.cancelled, true);
+    assert.equal(calls[2].id, 'sched_2');
+
+    const blocked = readResponse(await engine.executeTool({
+        name: 'cron',
+        arguments: { action: 'create', schedule: '0 3 * * *', prompt: 'cleanup with rm -rf /var/lib' },
+    }, { chatId: freshChat('cron-guard') }));
+    assert.equal(blocked.status, 'error');
+    assert.match(blocked.error, /blocked by SecurityApprovalGate/);
+});
+
+test('device lists and dispatches actions through the injected ADB controller', async () => {
+    const calls = [];
+    const engine = new HermesToolEngine({
+        devices: {
+            listDevices() {
+                calls.push({ op: 'list' });
+                return [{ serial: 'ABC', model: 'Pixel' }];
+            },
+            tap(x, y, serial) { calls.push({ op: 'tap', x, y, serial }); return { success: true }; },
+            inputText(text, serial) { calls.push({ op: 'text', text, serial }); return { success: true }; },
+            getRemoteKeys() { return ['up', 'down', 'ok']; },
+        },
+    });
+
+    const listed = readData(await engine.executeTool(
+        { name: 'device', arguments: {} },
+        { chatId: freshChat('device-list') },
+    ));
+    assert.equal(listed.count, 1);
+    assert.equal(listed.devices[0].serial, 'ABC');
+
+    const tapped = readData(await engine.executeTool({
+        name: 'device',
+        arguments: { action: 'tap', x: 10, y: 20, serial: 'ABC' },
+    }, { chatId: freshChat('device-tap') }));
+    assert.equal(tapped.success, true);
+    assert.deepEqual(calls[1], { op: 'tap', x: 10, y: 20, serial: 'ABC' });
+
+    const keys = readData(await engine.executeTool({
+        name: 'device',
+        arguments: { action: 'keys' },
+    }, { chatId: freshChat('device-keys') }));
+    assert.deepEqual(keys.keys, ['up', 'down', 'ok']);
+
+    const blocked = readResponse(await engine.executeTool({
+        name: 'device',
+        arguments: { action: 'text', text: 'please rm -rf /data' },
+    }, { chatId: freshChat('device-guard') }));
+    assert.equal(blocked.status, 'error');
+    assert.match(blocked.error, /blocked by SecurityApprovalGate/);
+});
+
+test('syncthing status and rescan go through the injected bridge', async () => {
+    const calls = [];
+    const engine = new HermesToolEngine({
+        syncthing: {
+            overview() { calls.push('overview'); return { configured: true, reachable: true, allInSync: true }; },
+            rescan(folderId) { calls.push(['rescan', folderId]); return { ok: true, folderId: folderId || 'all' }; },
+        },
+    });
+
+    const status = readData(await engine.executeTool(
+        { name: 'syncthing', arguments: {} },
+        { chatId: freshChat('st-status') },
+    ));
+    assert.equal(status.configured, true);
+    assert.equal(status.allInSync, true);
+
+    const rescanned = readData(await engine.executeTool({
+        name: 'syncthing',
+        arguments: { action: 'rescan', folderId: 'vault' },
+    }, { chatId: freshChat('st-rescan') }));
+    assert.equal(rescanned.ok, true);
+    assert.deepEqual(calls, ['overview', ['rescan', 'vault']]);
+});
+
+test('meeting join/list/transcript go through the injected meeting bot', async () => {
+    const calls = [];
+    const engine = new HermesToolEngine({
+        meetingBot: {
+            listActive() { return [{ botId: 'bot_1', meetUrl: 'https://meet.google.com/abc-defg-hij', status: 'in_call' }]; },
+            join(opts) { calls.push({ op: 'join', opts }); return { ok: true, joined: true, botId: 'bot_2', ...opts }; },
+            transcript(id) { calls.push({ op: 'transcript', id }); return { ok: true, botId: id, count: 0, transcript: [] }; },
+            leave(id) { calls.push({ op: 'leave', id }); return { ok: true, left: true, botId: id }; },
+        },
+    });
+
+    const listed = readData(await engine.executeTool(
+        { name: 'meeting', arguments: { action: 'list' } },
+        { chatId: freshChat('meet-list') },
+    ));
+    assert.equal(listed.count, 1);
+    assert.equal(listed.meetings[0].botId, 'bot_1');
+
+    const joined = readData(await engine.executeTool({
+        name: 'meeting',
+        arguments: { action: 'join', meetUrl: 'https://meet.google.com/aaa-bbbb-ccc' },
+    }, { chatId: freshChat('meet-join') }));
+    assert.equal(joined.joined, true);
+    assert.equal(calls[0].opts.meetUrl, 'https://meet.google.com/aaa-bbbb-ccc');
+
+    const transcript = readData(await engine.executeTool({
+        name: 'meeting',
+        arguments: { action: 'transcript', botId: 'bot_2' },
+    }, { chatId: freshChat('meet-tx') }));
+    assert.equal(transcript.count, 0);
+    assert.equal(calls[1].id, 'bot_2');
+});
+
+test('meeting speak goes through the injected meeting bot', async () => {
+    const calls = [];
+    const engine = new HermesToolEngine({
+        meetingBot: {
+            speak(botId, text, opts) {
+                calls.push({ botId, text, opts });
+                return { ok: true, spoken: true, botId, chars: String(text).length };
+            },
+        },
+    });
+
+    const spoken = readData(await engine.executeTool({
+        name: 'meeting',
+        arguments: { action: 'speak', botId: 'bot_1', text: 'Hello meeting' },
+    }, { chatId: freshChat('meet-speak') }));
+
+    assert.equal(spoken.ok, true);
+    assert.equal(spoken.spoken, true);
+    assert.equal(spoken.botId, 'bot_1');
+    assert.equal(spoken.chars, 'Hello meeting'.length);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].botId, 'bot_1');
+    assert.equal(calls[0].text, 'Hello meeting');
+});
+
+test('goal create/list/step/status/abandon/resume go through the injected goal engine', async () => {
+    const calls = [];
+    const store = new Map();
+    const engine = new HermesToolEngine({
+        goalEngine: {
+            create(spec) {
+                calls.push({ op: 'create', spec });
+                const goal = {
+                    id: 'goal_1',
+                    title: spec.title,
+                    description: spec.description,
+                    status: 'pending',
+                    progress: 0,
+                    attempts: 0,
+                    max_attempts: 5,
+                    chat_id: spec.chatId,
+                    owner_agent: spec.ownerAgent,
+                    last_error: null,
+                    stepCount: 0,
+                    done: false,
+                    created_at: 1,
+                    updated_at: 1,
+                    completed_at: null,
+                };
+                store.set(goal.id, goal);
+                return goal;
+            },
+            list(opts) {
+                calls.push({ op: 'list', opts });
+                return Array.from(store.values());
+            },
+            step(id) {
+                calls.push({ op: 'step', id });
+                const goal = store.get(id);
+                if (!goal) return { goalId: id, error: 'no such goal', done: true, ok: false };
+                goal.status = 'running';
+                goal.progress = 0.5;
+                return { goalId: id, status: 'running', stepId: 's1', ok: true, output: 'planned', error: null, progress: 0.5, done: false };
+            },
+            get(id) {
+                calls.push({ op: 'get', id });
+                const goal = store.get(id);
+                if (!goal) return null;
+                return { ...goal, steps: [{ id: 's1', title: 'Plan it', status: 'ok' }] };
+            },
+            summary() {
+                calls.push({ op: 'summary' });
+                return { total: store.size, active: store.size, attention: 0 };
+            },
+            abandon(id, reason) {
+                calls.push({ op: 'abandon', id, reason });
+                const goal = store.get(id);
+                if (!goal) return null;
+                goal.status = 'abandoned';
+                goal.last_error = reason || 'abandoned by request';
+                goal.done = true;
+                return goal;
+            },
+            resume(id) {
+                calls.push({ op: 'resume', id });
+                const goal = store.get(id);
+                if (!goal) return null;
+                goal.status = 'pending';
+                goal.last_error = null;
+                goal.done = false;
+                return goal;
+            },
+        },
+    });
+    const chatId = freshChat('goal');
+
+    const created = readData(await engine.executeTool({
+        name: 'goal',
+        arguments: { action: 'create', title: 'Ship the goal tool', description: 'Hermes can pursue goals' },
+    }, { chatId, agentId: 'hermes' }));
+    assert.equal(created.created, true);
+    assert.equal(created.goal.id, 'goal_1');
+    assert.equal(created.goal.title, 'Ship the goal tool');
+    assert.equal(created.goal.chatId, chatId);
+    assert.equal(created.goal.ownerAgent, 'hermes');
+    assert.equal(calls[0].op, 'create');
+
+    const listed = readData(await engine.executeTool(
+        { name: 'goal', arguments: { action: 'list' } },
+        { chatId },
+    ));
+    assert.equal(listed.count, 1);
+    assert.equal(listed.goals[0].id, 'goal_1');
+    assert.equal(listed.goals[0].status, 'pending');
+
+    const stepped = readData(await engine.executeTool({
+        name: 'goal',
+        arguments: { action: 'step', goalId: 'goal_1' },
+    }, { chatId }));
+    assert.equal(stepped.ok, true);
+    assert.equal(stepped.stepId, 's1');
+    assert.equal(stepped.progress, 0.5);
+
+    const status = readData(await engine.executeTool({
+        name: 'goal',
+        arguments: { action: 'status', goalId: 'goal_1' },
+    }, { chatId }));
+    assert.equal(status.goal.id, 'goal_1');
+    assert.equal(status.goal.steps[0].id, 's1');
+
+    const overview = readData(await engine.executeTool({
+        name: 'goal',
+        arguments: { action: 'status' },
+    }, { chatId }));
+    assert.equal(overview.total, 1);
+    assert.equal(overview.active, 1);
+
+    const abandoned = readData(await engine.executeTool({
+        name: 'goal',
+        arguments: { action: 'abandon', goalId: 'goal_1', reason: 'user cancelled' },
+    }, { chatId }));
+    assert.equal(abandoned.abandoned, true);
+    assert.equal(abandoned.goal.status, 'abandoned');
+    assert.equal(calls.find(c => c.op === 'abandon').reason, 'user cancelled');
+
+    const resumed = readData(await engine.executeTool({
+        name: 'goal',
+        arguments: { action: 'resume', id: 'goal_1' },
+    }, { chatId }));
+    assert.equal(resumed.resumed, true);
+    assert.equal(resumed.goal.status, 'pending');
+
+    const missing = readResponse(await engine.executeTool({
+        name: 'goal',
+        arguments: { action: 'step' },
+    }, { chatId: freshChat('goal-missing-id') }));
+    assert.equal(missing.status, 'error');
+    assert.match(missing.error, /goalId/);
+
+    const unknownAction = readResponse(await engine.executeTool({
+        name: 'goal',
+        arguments: { action: 'explode' },
+    }, { chatId: freshChat('goal-unknown') }));
+    assert.equal(unknownAction.status, 'error');
+    assert.match(unknownAction.error, /Unknown goal action/);
+
+    const blocked = readResponse(await engine.executeTool({
+        name: 'goal',
+        arguments: { action: 'create', title: 'cleanup with rm -rf /var/lib' },
+    }, { chatId: freshChat('goal-guard') }));
+    assert.equal(blocked.status, 'error');
+    assert.match(blocked.error, /blocked by SecurityApprovalGate/);
 });

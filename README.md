@@ -4,14 +4,18 @@ One control plane for every AI agent you already pay for — reachable from a
 browser, Telegram, or WhatsApp, with one shared memory behind all of them.
 
 Eight coding agents run as local CLI subprocesses on your existing
-subscriptions. A unified router puts a single API key in front of nine model
-providers. Each agent has its own switch to move it onto that router and back.
+subscriptions: antigravity, opencode, codex, claude, openclaw, hermes, pi,
+and grok. Hermes is the agent — there is no separate Harness. A unified
+router puts a single API key in front of nine model providers. DeepSeek,
+Kimi, Groq and Gemini are those router providers, not extra CLI adapters.
+Each agent has its own switch to move it onto that router and back.
 
 ```
-                    Telegram   WhatsApp   Web UI   Android
-                         \         |        |        /
-                          \        |        |       /
-                        Mission Control (:3141)
+                    Telegram   WhatsApp   WebUI :3000   Android
+                         \         |        |            /
+                          \        |        |           /
+                        Mission Control API (:3141)
+                        GET /  →  WebUI    /legacy → vanilla HUD
                                    |
         ┌──────────────┬───────────┼───────────┬──────────────┐
         │              │           │           │              │
@@ -28,32 +32,44 @@ providers. Each agent has its own switch to move it onto that router and back.
 
 ## Quick start
 
+Two processes, one UI: the bridge API on `:3141` and the WebUI (canonical
+Mission Control) on `:3000`. The old vanilla HUD is at `/legacy`.
+
 ```bash
 npm install
+cd webui && npm install && cd ..
 cp .env.example .env     # every setting is optional; see below
-node index.js
+
+# macOS / Linux
+chmod +x start.sh start.command   # once
+./start.sh
+
+# Windows
+.\start.ps1
 ```
 
-Then open the URL the startup banner prints — `http://localhost:3141/?token=admin`
-by default. Set `DASHBOARD_TOKEN` to something real before exposing it.
+Open `http://127.0.0.1:3000`. The bridge prints the same pair of URLs. Set
+`DASHBOARD_TOKEN` to something real before exposing it. `DASHBOARD_UI=legacy`
+keeps the vanilla HUD at `GET /` instead of redirecting to the WebUI.
 
-Nothing is required in `.env` to start. With no configuration you get the web
-Mission Control and whichever agent CLIs are installed on the machine. Telegram,
+Nothing is required in `.env` to start. With no configuration you get Mission
+Control and whichever agent CLIs are installed on the machine. Telegram,
 WhatsApp, provider keys and sync are each additive.
 
-The Next.js UI (3D memory globe, gesture control, voice assistant) is separate:
-
-```bash
-cd webui && npm install && npm run dev
-```
+`npm start` / `npm run start:all` boot only the bridge. `./start.sh` and
+`.\start.ps1` are the dual launcher. `npm run start:ui` is the WebUI alone
+(needs `webui/.next`, otherwise `cd webui && npm run dev`).
 
 ## The two features worth knowing
 
 ### One key, nine providers
 
-The OmniRouter serves an OpenAI-compatible API at `/v1`, so **any** tool that
-speaks OpenAI can point at it with one key and reach every provider you have
-configured:
+The OmniRouter is the opencodex-style local proxy: one key in front of every
+provider you have configured. The HTTP surface is OpenAI `/v1/chat/completions`
+plus `/v1/models` and `/v1/usage`, Anthropic `/v1/messages` (Claude Code), and
+OpenAI `/v1/responses` (Codex). `stream: true` on the translated routes is
+token-by-token SSE (Anthropic `text_delta` / Responses `output_text.delta`).
+Auth is `Authorization: Bearer` or `x-api-key`:
 
 ```bash
 curl http://localhost:3141/v1/chat/completions \
@@ -62,18 +78,23 @@ curl http://localhost:3141/v1/chat/completions \
 ```
 
 Behind that one key: a model catalogue with cost accounting, failover across
-providers with a circuit breaker, and key-pool rotation (`priority`,
-`round-robin`, `least-used`, `weighted`). It also speaks the **Anthropic**
-Messages API at `/v1/messages`, so Claude Code itself can be pointed at it.
+providers with a circuit breaker (OmniRoute), and key-pool rotation (`priority`,
+`round-robin`, `least-used`, `weighted` — 9router). OpenRouter is an optional
+*upstream provider* (`OPENROUTER_API_KEY`), not the git this gateway was copied
+from — that is [opencodex](https://github.com/lidge-jun/opencodex) (CLI/env
+gateway, Anthropic Bearer vs X-Api-Key, model discovery). Claude Code and Codex
+sit behind the same key via those env overlays.
 
 Get the key with `GET /api/router/key`. One is generated at boot if you did not
 set `OMNIROUTER_KEY`.
 
 ### A switch per agent
 
-Each agent has its own toggle. Flipping it on re-points that agent at the
-router; flipping it off restores exactly what was there before — a variable
-that was unset goes back to *unset*, not to an empty string.
+Each agent has its own toggle (WebUI Settings, and the Mission Control
+OmniRouter card). Flipping it on re-points that agent at the router; flipping
+it off restores exactly what was there before — a variable that was unset goes
+back to *unset*, not to an empty string. For Claude, `ANTHROPIC_API_KEY` is
+removed from the spawn env so it cannot fight `ANTHROPIC_AUTH_TOKEN`.
 
 ```bash
 # Move only Grok onto the router, on a DeepSeek model
@@ -122,6 +143,18 @@ NEXT_PUBLIC_BRIDGE_TOKEN=<matches DASHBOARD_TOKEN>
 Put TLS in front of it: WhatsApp's webhook requires HTTPS, and the dashboard
 token travels as a query parameter.
 
+## Android APK
+
+A thin Compose client lives in `android/` (package `com.agentos.client`). See
+[`android/README.md`](android/README.md).
+
+- **CI** builds a debug APK on changes under `android/` (and on manual
+  dispatch) via [`.github/workflows/android-apk.yml`](.github/workflows/android-apk.yml)
+  and uploads it as the `app-debug-apk` artifact.
+- **Local SDK** setup is documented in [`android/tools/SDK_SETUP.md`](android/tools/SDK_SETUP.md)
+  (`android/tools/setup-android-sdk.ps1` on Windows).
+- **Release signing** is documented in [`android/signing/RELEASE.md`](android/signing/RELEASE.md).
+
 ## Where the ideas come from
 
 This is a Node/CommonJS application. The projects below are separate
@@ -131,27 +164,30 @@ natively. Their code is not vendored in.
 
 | Project | What was taken |
 |---|---|
-| [OpenRouter](https://github.com/OpenRouterTeam) | Unified API surface, model catalogue, cost accounting |
+| [opencodex](https://github.com/lidge-jun/opencodex) | CLI/env gateway, Anthropic Bearer vs X-Api-Key, model discovery |
 | [OmniRoute](https://github.com/diegosouzapw/OmniRoute) | Provider failover chains |
 | [9router](https://github.com/decolua/9router) | Key-pool rotation |
-| [opencodex](https://github.com/lidge-jun/opencodex) | Pointing CLI agents at a gateway via env, and the auth details that makes work |
 | [OpenClaw](https://github.com/openclaw/openclaw) | Gateway as control plane, swappable model plugins, many channels |
 | [Hermes Agent](https://github.com/NousResearch/hermes-agent) | Self-improvement loop, FTS5 cross-session recall, cron delivery |
 | [JARVIS / HuggingGPT](https://github.com/microsoft/JARVIS) | Plan → select model → execute → synthesise |
 | [fullstack-agent](https://github.com/jaredrhod/fullstack-agent) | Memory vault, voice, visualiser, hand gestures |
+
+OpenRouter is an optional *upstream provider* (`OPENROUTER_API_KEY`), not one
+of these source repos.
 
 `GET /api/upstream` reports what has changed in each of them since you last
 looked. It only ever reports — merging an upstream change stays your decision.
 
 ## Honest limitations
 
-- **An agent does not join a meeting as a participant.** Rooms are created and
-  notes sync to Obsidian, but nothing joins the call audio; that needs a media
-  bot.
-- **macOS and Linux are unverified.** Paths and `adb` discovery cover all three,
-  but the agent adapters and launcher scripts are Windows-first.
-- **Two front ends.** `core/dashboardHtml.js` (vanilla) and `webui/` (Next.js)
-  are separate UIs over the same backend.
+- **MeetingBot speech uses Recall.ai + Google Translate TTS.** With
+  `RECALL_API_KEY` set, `core/MeetingBot.js` joins Zoom / Meet / Teams / etc.,
+  transcribes, and `speak()` plays mp3 into the call via Recall
+  `output_audio`. MiroTalk P2P rooms stay human-only. See
+  [docs/MEETINGS.md](docs/MEETINGS.md).
+- **Unix launchers are syntax-checked, not booted on Mac hardware here.**
+  `./start.sh`, `start.command`, and `satellite/start_satellite.sh` exist;
+  `bash -n` passes. This environment is Windows.
 - The Android client under `android/` is a thin gateway client; see
   `android/README.md` for its status.
 

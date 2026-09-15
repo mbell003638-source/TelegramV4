@@ -41,6 +41,11 @@
 //    consulted and is never a fallback: accepting it would let anyone holding
 //    a dashboard link pull another machine's whole memory vault. A failed
 //    check is a flat 401.
+//
+//    The shared secret is a bootstrap credential, not an invitation.
+//    An unknown X-Instance-Id is refused even when the secret is correct —
+//    the caller must already be a registered peer, and they receive only
+//    that peer's opt-in scopes.
 // =============================================================================
 
 const { SCOPES } = require('./InstanceSync');
@@ -472,12 +477,12 @@ async function handleSwarmRoutes(ctx, req, res, pathname, query) {
         }
 
         // A peer may never widen its own grant: what it asks for is intersected
-        // with what this instance granted it. The shared secret carries no
-        // grant of its own, so it gets exactly what it names.
+        // with what this instance granted it. A missing grant (should not
+        // happen — authenticatePeer refuses unknown devices) shares nothing.
         const asked = toList(q.scopes);
-        const allowed = caller.scopes === null
-            ? (asked.length ? asked : SCOPES.slice())
-            : (asked.length ? asked.filter((s) => caller.scopes.includes(s)) : caller.scopes.slice());
+        const allowed = Array.isArray(caller.scopes)
+            ? (asked.length ? asked.filter((s) => caller.scopes.includes(s)) : caller.scopes.slice())
+            : [];
 
         const got = await attempt(ctx, res, () => ctx.instanceSync.export({
             scopes: allowed,
@@ -503,12 +508,13 @@ async function handleSwarmRoutes(ctx, req, res, pathname, query) {
 
         // The payload is untrusted input from another machine: it is handed to
         // import() as data, scope-clamped to what this peer was granted, and
-        // nothing from it is used to pick scopes or identity.
+        // nothing from it is used to pick scopes or identity. Unknown devices
+        // never reach here; a missing grant shares nothing.
         const body = await ctx._readBody(req);
         const claimed = toList(body && body.scopes);
-        const allowed = caller.scopes === null
-            ? (claimed.length ? claimed : SCOPES.slice())
-            : claimed.filter((s) => caller.scopes.includes(s));
+        const allowed = Array.isArray(caller.scopes)
+            ? claimed.filter((s) => caller.scopes.includes(s))
+            : [];
 
         const got = await attempt(ctx, res,
             () => ctx.instanceSync.import(body, { scopes: allowed, peerId: caller.id }));
@@ -651,9 +657,13 @@ function safeStats(skills) {
  * Authorization header and ?token= are deliberately ignored, so a leaked
  * dashboard link can never be used to drain another machine's vault.
  *
- * @returns {{id: string, scopes: string[]|null}|null}
- *          A known peer (with its granted scopes), a shared-secret caller
- *          (scopes === null, meaning "no per-peer grant"), or null.
+ * The shared secret is a bootstrap *credential*, not a grant and not an
+ * invitation: the caller must already be a registered peer, identified by
+ * X-Instance-Id. An unknown device ID is refused even when the secret is
+ * correct — the same rule Syncthing uses for pairing.
+ *
+ * @returns {{id: string, scopes: string[]}|null}
+ *          A known peer (with its granted opt-in scopes), or null.
  */
 function authenticatePeer(ctx, req) {
     const headers = (req && req.headers) || {};
@@ -668,21 +678,27 @@ function authenticatePeer(ctx, req) {
         }
     }
 
-    // The shared secret is the bootstrap path, before either side knows the
-    // other's per-peer token. Checked in constant time by InstanceSync.
+    // Bootstrap path, before either side has exchanged a per-peer token.
+    // Constant-time check lives in InstanceSync; we still require a known id.
+    let secretOk = false;
     for (const candidate of [secret, presented]) {
         if (typeof candidate === 'string' && candidate
             && typeof sync.verifySharedSecret === 'function'
             && sync.verifySharedSecret(candidate)) {
-            const claimedId = headers['x-instance-id'];
-            return {
-                id: typeof claimedId === 'string' && claimedId ? claimedId : 'shared-secret',
-                scopes: null,
-            };
+            secretOk = true;
+            break;
         }
     }
+    if (!secretOk) return null;
 
-    return null;
+    const claimedId = headers['x-instance-id'];
+    if (typeof claimedId !== 'string' || !claimedId.trim()) return null;
+    const known = typeof sync.peerForId === 'function' ? sync.peerForId(claimedId) : null;
+    if (!known) return null;
+    return {
+        id: String(known.id || claimedId),
+        scopes: Array.isArray(known.scopes) ? known.scopes.slice() : [],
+    };
 }
 
 module.exports = { handleSwarmRoutes, authenticatePeer };

@@ -58,8 +58,8 @@ test('toggle ON builds the mapped env overlay for claude, codex and grok', () =>
         // Claude Code pulls GET /v1/models into its own picker with this on.
         assert.equal(claude.CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY, '1');
         // ANTHROPIC_API_KEY maps to X-Api-Key; setting it alongside
-        // ANTHROPIC_AUTH_TOKEN is an auth conflict, so it must stay unset.
-        assert.equal('ANTHROPIC_API_KEY' in claude, false);
+        // ANTHROPIC_AUTH_TOKEN is an auth conflict, so overlay null-deletes it.
+        assert.equal(claude.ANTHROPIC_API_KEY, null);
         assert.equal(claude.OMNIROUTER_ACTIVE, '1');
         assert.equal(ov.isEnabled('claude'), true);
 
@@ -275,6 +275,93 @@ test('override state survives a save/load round-trip', () => {
         assert.equal(reloaded.snapshot.GROK_MODEL, 'prior-grok');
         assert.deepEqual(second.disable('grok').restored, reloaded.snapshot);
     } finally {
+        restoreEnv();
+        cleanup(dir);
+    }
+});
+
+test('getSpawnEnv deletes overlay keys whose value is null', () => {
+    const dir = tempBaseDir();
+    const restoreEnv = stashEnv([
+        'ANTHROPIC_BASE_URL', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_MODEL',
+        'ANTHROPIC_API_KEY', 'OMNIROUTER_ACTIVE', 'CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY',
+    ]);
+    try {
+        resetAgentOverrides();
+        const ov = getAgentOverrides(dir);
+        const agent = new FakeAgent('claude');
+
+        process.env.ANTHROPIC_API_KEY = 'x-api-key-from-env';
+        ov.enable('claude', { providerId: 'omnirouter', baseUrl: 'https://router.local/v1', apiKey: RAW_KEY });
+
+        const overlay = ov.getEnvOverlay('claude');
+        assert.equal(overlay.ANTHROPIC_API_KEY, null, 'null means delete, not empty string');
+        assert.notEqual(overlay.ANTHROPIC_API_KEY, '');
+
+        // Overlay null wins over both process.env and extra — key is gone, not ''.
+        const onEnv = agent.getSpawnEnv({ ANTHROPIC_API_KEY: 'from-extra' });
+        assert.equal('ANTHROPIC_API_KEY' in onEnv, false);
+        assert.equal(onEnv.ANTHROPIC_API_KEY, undefined);
+        assert.notEqual(onEnv.ANTHROPIC_API_KEY, '');
+        assert.equal(onEnv.ANTHROPIC_AUTH_TOKEN, RAW_KEY);
+        assert.equal(onEnv.ANTHROPIC_BASE_URL, 'https://router.local/v1');
+        assert.equal(onEnv.CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY, '1');
+        assert.equal(onEnv.OMNIROUTER_ACTIVE, '1');
+        // Parent process.env is never mutated.
+        assert.equal(process.env.ANTHROPIC_API_KEY, 'x-api-key-from-env');
+    } finally {
+        resetAgentOverrides();
+        restoreEnv();
+        cleanup(dir);
+    }
+});
+
+test('claude overlay unsets ANTHROPIC_API_KEY; disable restores snapshot losslessly', () => {
+    const dir = tempBaseDir();
+    const restoreEnv = stashEnv([
+        'ANTHROPIC_BASE_URL', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_MODEL',
+        'ANTHROPIC_API_KEY', 'OMNIROUTER_ACTIVE', 'CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY',
+    ]);
+    try {
+        resetAgentOverrides();
+        const ov = getAgentOverrides(dir);
+        const agent = new FakeAgent('claude');
+
+        // Prior value present: overlay deletes it, disable brings it back.
+        process.env.ANTHROPIC_API_KEY = 'prior-x-api-key';
+        delete process.env.ANTHROPIC_BASE_URL;
+        ov.enable('claude', { providerId: 'omnirouter', model: 'claude-opus-4', baseUrl: 'https://router.local/v1', apiKey: RAW_KEY });
+
+        const snapshot = ov.get('claude').snapshot;
+        assert.equal(snapshot.ANTHROPIC_API_KEY, 'prior-x-api-key');
+        assert.equal(snapshot.ANTHROPIC_BASE_URL, null);
+
+        const onEnv = agent.getSpawnEnv();
+        assert.equal('ANTHROPIC_API_KEY' in onEnv, false);
+        assert.equal(onEnv.ANTHROPIC_AUTH_TOKEN, RAW_KEY);
+        assert.equal(onEnv.ANTHROPIC_BASE_URL, 'https://router.local/v1');
+        assert.equal(onEnv.ANTHROPIC_MODEL, 'claude-opus-4');
+
+        const result = ov.disable('claude');
+        assert.equal(result.restored.ANTHROPIC_API_KEY, 'prior-x-api-key');
+        assert.equal(result.restored.ANTHROPIC_BASE_URL, null);
+        const offEnv = agent.getSpawnEnv();
+        assert.equal(offEnv.ANTHROPIC_API_KEY, 'prior-x-api-key');
+        assert.equal('ANTHROPIC_BASE_URL' in offEnv, false);
+        assert.equal(process.env.ANTHROPIC_API_KEY, 'prior-x-api-key');
+
+        // Previously unset: overlay still deletes, disable keeps it unset.
+        delete process.env.ANTHROPIC_API_KEY;
+        ov.enable('claude', { providerId: 'omnirouter', baseUrl: 'https://router.local/v1', apiKey: RAW_KEY });
+        assert.equal(ov.get('claude').snapshot.ANTHROPIC_API_KEY, null);
+        assert.equal('ANTHROPIC_API_KEY' in agent.getSpawnEnv(), false);
+
+        const unsetResult = ov.disable('claude');
+        assert.equal(unsetResult.restored.ANTHROPIC_API_KEY, null);
+        assert.equal('ANTHROPIC_API_KEY' in agent.getSpawnEnv(), false);
+        assert.equal(process.env.ANTHROPIC_API_KEY, undefined);
+    } finally {
+        resetAgentOverrides();
         restoreEnv();
         cleanup(dir);
     }

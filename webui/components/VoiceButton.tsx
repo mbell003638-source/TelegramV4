@@ -22,6 +22,9 @@ export default function VoiceButton({ onTranscript, onListeningChange, className
     }
 
     const recognition = new SpeechRecognition();
+    // Push-to-talk only. Always-on wake-word listening lives in JarvisAssistant
+    // (mounted from layout.tsx). Do not set continuous=true — both would fight
+    // for the mic on any page that mounts both.
     recognition.continuous = false;
     recognition.interimResults = true;
     recognition.lang = 'en-US';

@@ -156,3 +156,77 @@ test('SelfImprovement engine evaluates turns and scores discipline', async () =>
     const mems = db.getMemories('chat-100');
     assert.ok(mems.length > 0);
 });
+
+test('MissionControl mounts delegation and peer-auth instance sync at boot', async () => {
+    const db = tempDb();
+    const PEER_TOKEN = 'peer-tok-boot-wiring-1';
+    const SHARED = 'shared-secret-boot-wiring';
+    const DASH = 'dash-token-boot-wiring';
+
+    const delegation = {
+        getTasks: () => [{ id: 't1', status: 'pending' }],
+        agentKeys: () => ['claude', 'codex'],
+    };
+    const instanceSync = {
+        peerForToken: (presented) => (presented === PEER_TOKEN
+            ? { id: 'laptop', scopes: ['memories'] }
+            : null),
+        peerForId: (id) => (id === 'laptop' ? { id: 'laptop', scopes: ['memories'] } : null),
+        verifySharedSecret: (presented) => presented === SHARED,
+        export: ({ scopes }) => ({ instanceId: 'self', scopes, counts: { memories: 0, skills: 0, config: 0 } }),
+        import: () => ({ ok: true }),
+    };
+
+    const server = new MissionControlServer({
+        database: db,
+        sessionStore: { getActiveAgent: () => 'antigravity', getRecentTurns: () => [] },
+        agents: { antigravity: { name: 'Antigravity', emoji: '🤖' } },
+        port: 3163,
+        token: DASH,
+        delegation,
+        instanceSync,
+    });
+
+    try {
+        const started = await server.start();
+        assert.equal(started, true);
+        const base = 'http://127.0.0.1:3163';
+
+        // Delegation is a dashboard-token route: constructed AND mounted.
+        const listed = await fetch(`${base}/api/delegation/tasks?token=${DASH}`);
+        assert.equal(listed.status, 200);
+        const listedBody = await listed.json();
+        assert.deepEqual(listedBody.tasks, [{ id: 't1', status: 'pending' }]);
+
+        const unauthDeleg = await fetch(`${base}/api/delegation/tasks`);
+        assert.equal(unauthDeleg.status, 401);
+
+        // Peer export is reachable WITHOUT the dashboard token.
+        const peerOk = await fetch(`${base}/api/instance/export?scopes=memories`, {
+            headers: { 'X-Instance-Token': PEER_TOKEN },
+        });
+        assert.equal(peerOk.status, 200);
+        const peerBody = await peerOk.json();
+        assert.deepEqual(peerBody.scopes, ['memories']);
+
+        // A leaked dashboard token is not a vault key.
+        const dashAsPeer = await fetch(`${base}/api/instance/export?token=${DASH}`);
+        assert.equal(dashAsPeer.status, 401);
+
+        // Shared secret of an unknown device id is refused (not auto-accepted).
+        const unknown = await fetch(`${base}/api/instance/export`, {
+            headers: { 'X-Instance-Secret': SHARED, 'X-Instance-Id': 'stranger' },
+        });
+        assert.equal(unknown.status, 401);
+
+        // Shared secret of a registered peer is the bootstrap path, still opt-in.
+        const bootstrap = await fetch(`${base}/api/instance/export?scopes=memories,config`, {
+            headers: { 'X-Instance-Secret': SHARED, 'X-Instance-Id': 'laptop' },
+        });
+        assert.equal(bootstrap.status, 200);
+        const bootstrapBody = await bootstrap.json();
+        assert.deepEqual(bootstrapBody.scopes, ['memories']);
+    } finally {
+        await server.stop();
+    }
+});

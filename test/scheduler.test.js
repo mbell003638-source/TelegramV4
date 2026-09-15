@@ -175,6 +175,24 @@ test('scheduleTask persists and round-trips through the database', () => {
     } finally { cleanup(); }
 });
 
+test('listTasks and cancelTask are the scheduler surface the Hermes cron tool calls', () => {
+    const { scheduler, cleanup } = makeScheduler();
+    try {
+        const task = scheduler.scheduleTask({
+            chatId: 'c1', prompt: 'ping', schedule: '0 4 * * *', from: at(2026, 3, 10, 12, 0),
+        });
+        const listed = scheduler.listTasks('c1');
+        assert.equal(listed.length, 1);
+        assert.equal(listed[0].id, task.id);
+
+        const miss = scheduler.cancelTask('no-such-task');
+        assert.equal(miss.cancelled, false);
+        const hit = scheduler.cancelTask(task.id);
+        assert.equal(hit.cancelled, true);
+        assert.equal(scheduler.listTasks('c1').length, 0);
+    } finally { cleanup(); }
+});
+
 test('scheduleTask refuses a malformed cron instead of storing a task that never fires', () => {
     const { scheduler, database, cleanup } = makeScheduler();
     try {

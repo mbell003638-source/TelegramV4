@@ -1,7 +1,9 @@
 // =============================================================================
 //  core/MissionControl.js — Mission Control Web Server & SSE Streamer
 //
-//  Serves the local Kanban Dashboard on http://localhost:3141
+//  Bridge API on http://localhost:3141. Canonical UI is the Next.js WebUI
+//  (WEBUI_ORIGIN, default http://127.0.0.1:3000): GET / 302s there unless
+//  DASHBOARD_UI=legacy. Vanilla HUD remains at GET /legacy.
 //  Connects:
 //    - Web Kanban UI to SQLite database (mission_tasks, hive_mind, memories)
 //    - Real-time SSE event bus to channelEventBus
@@ -11,7 +13,7 @@ const http = require('http');
 const { getDashboardHtml } = require('./dashboardHtml');
 const { channelEventBus, ChannelEvents } = require('./EventBus');
 const { globalAgentPool } = require('./AgentPool');
-const { globalSatelliteHub } = require('./SatelliteHub');
+const { globalSatelliteHub, handleSatelliteRoutes } = require('./SatelliteHub');
 const fs = require('fs');
 const path = require('path');
 const KillSwitches = require('./KillSwitches');
@@ -21,7 +23,7 @@ const { handleRouterRoutes } = require('./RouterRoutes');
 const { handleSwarmRoutes } = require('./SwarmRoutes');
 
 class MissionControlServer {
-    constructor({ database, sessionStore, actionExecutor, agents, port = 3141, token = null, providerRouter = null, providerRegistry = null, agentOverrides = null, memorySearch = null, taskPlanner = null, scheduler = null, selfImprovement = null, upstreamWatch = null, syncthing = null, delegation = null, council = null, instanceSync = null, skills = null, goals = null, quota = null, meetingBot = null, discovery = null }) {
+    constructor({ database, sessionStore, actionExecutor, agents, port = 3141, token = null, providerRouter = null, providerRegistry = null, agentOverrides = null, memorySearch = null, taskPlanner = null, scheduler = null, selfImprovement = null, upstreamWatch = null, syncthing = null, delegation = null, council = null, instanceSync = null, skills = null, goals = null, quota = null, meetingBot = null, discovery = null, satelliteHub = null }) {
         this.db = database;
         this.sessionStore = sessionStore;
         this.actionExecutor = actionExecutor;
@@ -50,6 +52,7 @@ class MissionControlServer {
         this.quota = quota;
         this.meetingBot = meetingBot;
         this.discovery = discovery;
+        this.satelliteHub = satelliteHub || globalSatelliteHub;
         // Set by index.js when the WhatsApp Cloud API channel is configured.
         this.whatsappWebhook = null;
         // OmniRouter OpenAI-compatible surface (/v1/*), gated by its own master key.
@@ -113,7 +116,15 @@ class MissionControlServer {
                 }
             });
             this.server.listen(this.port, '0.0.0.0', () => {
-                console.log(`🚀 Mission Control Dashboard online at: http://localhost:${this.port}/?token=${this.token}`);
+                const tokenQ = `?token=${encodeURIComponent(this.token)}`;
+                if (this._isLegacyDashboard()) {
+                    console.log(`🚀 Mission Control (legacy HUD) online at: http://localhost:${this.port}/${tokenQ}`);
+                } else {
+                    const origin = this._webuiOrigin();
+                    console.log(`🚀 Mission Control API online at: http://localhost:${this.port}/`);
+                    console.log(`   WebUI:      ${origin}/${tokenQ}`);
+                    console.log(`   Legacy HUD: http://localhost:${this.port}/legacy${tokenQ}`);
+                }
                 resolve(true);
             });
         });
@@ -144,23 +155,61 @@ class MissionControlServer {
         res.end(body);
     }
 
-    _readBody(req) {
+    _isLegacyDashboard() {
+        return String(process.env.DASHBOARD_UI || '').trim().toLowerCase() === 'legacy';
+    }
+
+    _webuiOrigin() {
+        const raw = String(process.env.WEBUI_ORIGIN || 'http://127.0.0.1:3000').trim();
+        const stripped = raw.replace(/\/+$/, '');
+        return stripped || 'http://127.0.0.1:3000';
+    }
+
+    _redirectToWebUi(res, reqUrl) {
+        let dest;
+        try {
+            dest = new URL(this._webuiOrigin());
+        } catch {
+            dest = new URL('http://127.0.0.1:3000');
+        }
+        const token = reqUrl.searchParams.get('token');
+        if (token) dest.searchParams.set('token', token);
+        res.writeHead(302, { Location: dest.toString() });
+        res.end();
+    }
+
+    _serveLegacyDashboard(res, query) {
+        const chatId = query.chatId || '';
+        const html = getDashboardHtml(this.token, chatId);
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+        res.end(html);
+    }
+
+    _readBody(req, { maxBytes = 5 * 1024 * 1024 } = {}) {
         return new Promise((resolve, reject) => {
             let body = '';
+            let settled = false;
+            const finish = (fn, value) => {
+                if (settled) return;
+                settled = true;
+                fn(value);
+            };
             req.on('data', (chunk) => {
+                if (settled) return;
                 body += chunk.toString();
-                if (body.length > 5 * 1024 * 1024) { // 5MB limit
-                    reject(new Error('Payload too large'));
+                if (body.length > maxBytes) {
+                    finish(reject, new Error('Payload too large'));
                 }
             });
             req.on('end', () => {
+                if (settled) return;
                 try {
-                    resolve(body ? JSON.parse(body) : {});
+                    finish(resolve, body ? JSON.parse(body) : {});
                 } catch (e) {
-                    resolve({});
+                    finish(resolve, {});
                 }
             });
-            req.on('error', reject);
+            req.on('error', (err) => finish(reject, err));
         });
     }
 
@@ -187,10 +236,45 @@ class MissionControlServer {
         const pathname = reqUrl.pathname;
         const query = Object.fromEntries(reqUrl.searchParams.entries());
 
-        // Auth check (allow / without token to prompt or query token)
+        // Peer-authenticated instance sync. SwarmRoutes gates these two paths
+        // with X-Instance-Token / X-Instance-Secret only. Requiring the
+        // dashboard token would make InstanceSync.pull/push impossible (they
+        // do not send it); accepting it would let a leaked UI link drain
+        // another machine's vault. Unknown device IDs still 401 inside
+        // authenticatePeer — this only skips the dashboard gate.
+        if (pathname === '/api/instance/export' || pathname === '/api/instance/import') {
+            try {
+                if (await handleSwarmRoutes(this, req, res, pathname, query)) return;
+            } catch (err) {
+                return this._sendJson(res, 500, { error: err.message });
+            }
+        }
+
+        // Satellite worker routes carry SATELLITE_KEY (not the dashboard token).
+        // Requiring DASHBOARD_TOKEN would reject a dedicated worker secret;
+        // accepting it as a fallback on poll/response would let a leaked UI
+        // link impersonate a worker and steal queued commands. handleSatelliteRoutes
+        // gates workers on SATELLITE_KEY and master paths (status/dispatch) on
+        // this.token. Unknown /api/satellite/* still fall through.
+        if (pathname.startsWith('/api/satellite/')) {
+            try {
+                if (await handleSatelliteRoutes(this, req, res, pathname, query)) return;
+            } catch (err) {
+                return this._sendJson(res, 500, { error: err.message });
+            }
+        }
+
+        // Canonical UI is WebUI. GET / 302s there (token query preserved)
+        // unless DASHBOARD_UI=legacy keeps the vanilla HUD at /.
+        const reqMethod = (req.method || 'GET').toUpperCase();
+        if ((reqMethod === 'GET' || reqMethod === 'HEAD') && pathname === '/' && !this._isLegacyDashboard()) {
+            return this._redirectToWebUi(res, reqUrl);
+        }
+
+        // Auth check (allow / and /legacy without token to prompt)
         const reqToken = query.token || req.headers['authorization']?.replace('Bearer ', '');
         if (this.token && reqToken !== this.token) {
-            if (pathname === '/') {
+            if (pathname === '/' || pathname === '/legacy') {
                 res.writeHead(401, { 'Content-Type': 'text/html' });
                 return res.end(`
                     <html><body style="background:#0f0f0f;color:#fff;font-family:sans-serif;padding:40px;text-align:center;">
@@ -203,12 +287,9 @@ class MissionControlServer {
         }
 
         try {
-            // Serve Dashboard HTML
-            if (pathname === '/') {
-                const chatId = query.chatId || '';
-                const html = getDashboardHtml(this.token, chatId);
-                res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-                return res.end(html);
+            // Vanilla HUD: always at /legacy; also at / when DASHBOARD_UI=legacy
+            if (pathname === '/legacy' || pathname === '/') {
+                return this._serveLegacyDashboard(res, query);
             }
 
             // Real-Time SSE Event Stream
@@ -256,7 +337,7 @@ class MissionControlServer {
                     model: (this.sessionStore && typeof this.sessionStore.getActiveModel === 'function')
                         ? (this.sessionStore.getActiveModel(activeAgentKey, chatId) || activeAgentKey)
                         : activeAgentKey,
-                    satellites: globalSatelliteHub.getStatus(),
+                    satellites: this.satelliteHub.getStatus(),
                     uptimeSeconds: Math.floor(process.uptime()),
                     timestamp: Date.now(),
                     contextPct,
@@ -1298,31 +1379,6 @@ class MissionControlServer {
                 this.broadcast('processing', { processing: false });
                 this.broadcast('assistant_message', { content: '🛑 Stopped by user.', source: 'system' });
                 return this._sendJson(res, 200, { success: true, aborted: true });
-            }
-
-            // 9. Satellite Workers (Distributed Windows/Remote nodes)
-            if (pathname === '/api/satellite/poll') {
-                const body = (req.method === 'POST') ? await this._readBody(req) : {};
-                const satelliteId = body.satelliteId || query.satelliteId || 'windows-desktop';
-                const metadata = {
-                    hostname: body.hostname || query.hostname,
-                    platform: body.platform || query.platform || 'win32',
-                    systemInfo: body.systemInfo || {},
-                };
-                const ip = req.socket?.remoteAddress || '127.0.0.1';
-                globalSatelliteHub.handlePoll(satelliteId, res, metadata, ip);
-                return;
-            }
-
-            if (pathname === '/api/satellite/response' && req.method === 'POST') {
-                const body = await this._readBody(req);
-                const satelliteId = body.satelliteId || query.satelliteId;
-                const result = globalSatelliteHub.handleResponse(satelliteId, body);
-                return this._sendJson(res, 200, result);
-            }
-
-            if (pathname === '/api/satellite/status') {
-                return this._sendJson(res, 200, globalSatelliteHub.getStatus());
             }
 
             // 404 for unknown endpoints

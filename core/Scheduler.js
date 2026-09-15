@@ -277,6 +277,21 @@ class Scheduler {
         return this.database.createScheduledTask({ id, chatId, agentId, prompt, schedule, nextRun: next, status });
     }
 
+    /** Upcoming (and paused) jobs, optionally scoped to one chat. */
+    listTasks(chatId) {
+        return this.database.getScheduledTasks(chatId);
+    }
+
+    /** Drop a job by id. Returns { cancelled, id } so callers can tell a miss from a hit. */
+    cancelTask(id) {
+        const taskId = String(id || '').trim();
+        if (!taskId) throw new Error('cancelTask requires a task id');
+        const existing = this.database.getScheduledTask(taskId);
+        if (!existing) return { cancelled: false, id: taskId, error: 'not found' };
+        const ok = this.database.deleteScheduledTask(taskId);
+        return { cancelled: ok, id: taskId };
+    }
+
     // =========================================================================
     //  TICK LOOP
     // =========================================================================

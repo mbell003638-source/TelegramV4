@@ -11,8 +11,11 @@ const path = require('path');
 const os = require('os');
 
 class DeviceAutomation {
-    constructor() {
-        this.adbPath = this._locateAdb();
+    constructor(opts = {}) {
+        opts = opts || {};
+        // Optional exec/adbPath injection; production leaves both unset.
+        this._exec = typeof opts.exec === 'function' ? opts.exec : exec;
+        this.adbPath = opts.adbPath !== undefined ? opts.adbPath : this._locateAdb();
         this.selectedDevice = null;
         this.cachedDevices = [];
         this.lastScanTime = 0;
@@ -72,7 +75,7 @@ class DeviceAutomation {
         }
 
         return new Promise((resolve) => {
-            exec(`"${this.adbPath}" devices -l`, { timeout: 4000 }, (err, stdout) => {
+            this._exec(`"${this.adbPath}" devices -l`, { timeout: 4000 }, (err, stdout) => {
                 if (err || !stdout) {
                     this.cachedDevices = [];
                     return resolve([]);
@@ -131,7 +134,7 @@ class DeviceAutomation {
 
         return new Promise((resolve, reject) => {
             const cmd = `"${this.adbPath}" ${targetArg} exec-out screencap -p`;
-            exec(cmd, { encoding: 'buffer', maxBuffer: 15 * 1024 * 1024, timeout: 6000 }, (err, stdout) => {
+            this._exec(cmd, { encoding: 'buffer', maxBuffer: 15 * 1024 * 1024, timeout: 6000 }, (err, stdout) => {
                 if (err) {
                     return reject(new Error(`Screenshot failed: ${err.message}`));
                 }
@@ -188,7 +191,7 @@ class DeviceAutomation {
 
     _execCmd(cmd, timeout = 5000) {
         return new Promise((resolve, reject) => {
-            exec(cmd, { timeout }, (err, stdout, stderr) => {
+            this._exec(cmd, { timeout }, (err, stdout, stderr) => {
                 if (err) return reject(new Error(stderr || err.message));
                 resolve({ success: true, output: stdout.trim() });
             });

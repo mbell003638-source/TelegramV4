@@ -84,26 +84,21 @@ hardcoded `binaryPath` display strings in `Sidebar.tsx` and
 `agents/[agentId]/page.tsx` that showed a stranger's filesystem paths in the UI
 as though they had been detected. Now derived from the real agent scan.
 
-### 8. Two divergent agent layers (High — documented, not yet merged)
+### 8. Two divergent agent layers (High — later collapsed onto the bridge)
 
-`webui/app/api/chat/route.ts` re-implements agent spawning from scratch with
-its own binary paths and its own 25–30s timeouts, and only falls back to the
-bridge if that fails. It therefore bypasses `AgentPool`, `SessionStore`,
-`LoopGuard`, `KillSwitches`, `ExfiltrationGuard`, the audit log, and shared
-memory. Two code paths can run the same agent with different safety rules.
-
-This is the largest remaining structural issue. It is deliberately **not**
-fixed in this pass: collapsing it into the bridge is a behavioural change that
-deserves its own reviewed commit, not a drive-by edit. Tracked as the top item
-in "Next".
+`webui/app/api/chat/route.ts` used to spawn CLI agents itself, bypassing
+`AgentPool`, `SessionStore`, `LoopGuard`, `KillSwitches`, `ExfiltrationGuard`,
+the audit log, and shared memory. That path is gone: the route now POSTs to
+Mission Control `/api/chat/send` and polls `/api/chat/history` for a real
+assistant turn. It does not invent a reply. See commit `206023a`.
 
 ---
 
 ## Next
 
-1. Collapse `webui/app/api/chat/route.ts` onto the bridge so one agent layer
-   enforces one set of guards (finding 8).
-2. Consolidate the two UIs — `core/dashboardHtml.js` (4,634 lines of vanilla
+1. Consolidate the two UIs — `core/dashboardHtml.js` (4,634 lines of vanilla
    HTML) and the Next.js `webui/` are separate front ends over the same backend.
-3. `package.json` has no `start` script and `"description"`/`"author"` are
+2. `package.json` has no `start` script and `"description"`/`"author"` are
    empty; `test` runs `node --test test/*.test.js`.
+3. Meeting bot still cannot speak in a call (`core/MeetingBot.js` listens and
+   transcribes via Recall.ai only). macOS/Linux remain unverified.

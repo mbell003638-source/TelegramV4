@@ -3,6 +3,14 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
+// Optional release signing. Absent on CI and a fresh checkout so
+// assembleDebug / unsigned assembleRelease keep working.
+val keystorePropertiesFile = rootProject.file("signing/keystore.properties")
+val keystoreProperties = java.util.Properties()
+if (keystorePropertiesFile.exists()) {
+    keystorePropertiesFile.reader(Charsets.UTF_8).use { keystoreProperties.load(it) }
+}
+
 android {
     namespace = "com.agentos.client"
     compileSdk = 34
@@ -15,6 +23,21 @@ android {
         versionName = "1.0.0"
     }
 
+    signingConfigs {
+        if (keystorePropertiesFile.exists()) {
+            create("release") {
+                // storeFile is relative to the android/ Gradle root; normalize
+                // backslashes so the same properties file works on Windows.
+                storeFile = rootProject.file(
+                    keystoreProperties.getProperty("storeFile").replace('\\', '/'),
+                )
+                storePassword = keystoreProperties.getProperty("storePassword")
+                keyAlias = keystoreProperties.getProperty("keyAlias")
+                keyPassword = keystoreProperties.getProperty("keyPassword")
+            }
+        }
+    }
+
     buildTypes {
         release {
             // Left unminified by default so a locally built release APK behaves
@@ -24,6 +47,9 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",
             )
+            if (keystorePropertiesFile.exists()) {
+                signingConfig = signingConfigs.getByName("release")
+            }
         }
         debug {
             isMinifyEnabled = false

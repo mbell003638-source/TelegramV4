@@ -1,10 +1,13 @@
 {
   "name": "telegram-bridge-v4",
   "version": "1.0.0",
-  "description": "",
+  "description": "Agent OS — Telegram/WhatsApp/WebUI mission control",
   "main": "index.js",
   "scripts": {
-    "test": "node --test test/*.test.js"
+    "test": "node --test test/*.test.js",
+    "start": "node index.js",
+    "start:ui": "npm run start --prefix webui",
+    "start:all": "node index.js"
   },
   "keywords": [],
   "author": "",

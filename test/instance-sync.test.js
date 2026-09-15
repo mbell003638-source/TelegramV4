@@ -258,6 +258,55 @@ test('peerForToken resolves a known token and returns a falsy value for an unkno
     } finally { cleanup(); }
 });
 
+test('peerForId returns a token-free descriptor for a known peer and null for an unknown id', () => {
+    const { instance, cleanup } = makeInstance();
+    try {
+        instance.addPeer({ id: 'peerA', url: 'http://peer.local', token: 'tok-A-123456789', scopes: ['memories'] });
+
+        const found = instance.peerForId('peerA');
+        assert.ok(found);
+        assert.equal(found.id, 'peerA');
+        assert.deepEqual(found.scopes, ['memories']);
+        assert.equal(found.token, undefined, 'peerForId must not carry the raw token');
+        assert.equal(found.url, 'http://peer.local');
+
+        assert.equal(instance.peerForId('stranger'), null);
+        assert.equal(instance.peerForId(''), null);
+        assert.equal(instance.peerForId(null), null);
+        assert.equal(instance.listPeers().length, 1, 'looking up an unknown id must not auto-register it');
+    } finally { cleanup(); }
+});
+
+test('pull() and push() refuse an unknown peer id without touching the transport', async () => {
+    const { instance, cleanup } = makeInstance();
+    try {
+        let called = false;
+        instance.transport = async () => { called = true; return {}; };
+        await assert.rejects(() => instance.pull('ghost'), /Unknown peer: ghost/);
+        await assert.rejects(() => instance.push('ghost'), /Unknown peer: ghost/);
+        assert.equal(called, false);
+        assert.equal(instance.listPeers().length, 0, 'a refused id must not be auto-accepted');
+    } finally { cleanup(); }
+});
+
+test('push() presents X-Instance-Id and the shared secret; it does not invent peers', async () => {
+    const { instance, cleanup } = makeInstance({ sharedSecret: 'bootstrap-secret-value' });
+    try {
+        instance.addPeer({ id: 'peerA', url: 'http://peer.local', token: 'tok-A-123456789', scopes: ['memories'] });
+        let captured = null;
+        instance.transport = async (req) => { captured = req; return { ok: true }; };
+
+        await instance.push('peerA');
+
+        assert.ok(captured);
+        assert.equal(captured.headers['X-Instance-Id'], 'self');
+        assert.equal(captured.headers['X-Instance-Token'], 'tok-A-123456789');
+        assert.equal(captured.headers['X-Instance-Secret'], 'bootstrap-secret-value');
+        assert.equal(instance.peerForId('peer.local'), null);
+        assert.equal(instance.listPeers().length, 1);
+    } finally { cleanup(); }
+});
+
 // ===========================================================================
 //  export({since}) cursor
 // ===========================================================================

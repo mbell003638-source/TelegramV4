@@ -1,0 +1,21 @@
+# Real signing material and credentials must NEVER be committed. A keystore
+# or a password pushed to git history is effectively unrecoverable the
+# instant it's pushed — treat any leak here as a full key compromise, not a
+# mistake you can quietly clean up (see RELEASE.md for exactly why).
+#
+# Order matters in this file: the broad ignore patterns come first, and the
+# `!keystore.properties.example` negation comes LAST so it wins. If this file
+# is ever reordered so the negation sits before a pattern that matches it,
+# git silently drops the example from tracking again — keep the negation at
+# the bottom.
+
+# The real, filled-in credentials file. Never commit this.
+keystore.properties
+
+# Keystore / key material, in any of the common formats.
+*.jks
+*.keystore
+*.p12
+
+# Keep the template tracked so contributors can see the expected keys.
+!keystore.properties.example

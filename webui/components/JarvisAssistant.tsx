@@ -5,6 +5,11 @@ import { Mic, MicOff, Volume2, VolumeX, X, Sparkles, Globe, Shield, Activity, Te
 import { useRouter } from 'next/navigation';
 import { bridgeUrl } from '@/lib/config';
 
+/** True when the bridge/route refused a send because a kill switch is off. */
+function isKillSwitchBlock(error: string): boolean {
+  return /kill switch|LLM_SPAWN_ENABLED|WARROOM_|DASHBOARD_MUTATIONS|execution paused/i.test(error);
+}
+
 export default function JarvisAssistant() {
   const router = useRouter();
   const [isOpen, setIsOpen] = useState(false);
@@ -33,6 +38,11 @@ export default function JarvisAssistant() {
   const restartTimerRef = useRef<any>(null);
   const restartCountRef = useRef(0);
   const stoppingRef = useRef(false);
+  const handleVoiceCommandRef = useRef<(cmd: string) => void>(() => {});
+  const dispatchingRef = useRef(false);
+  const sessionIdRef = useRef(`jarvis_${Date.now()}`);
+  const [dispatchBlocked, setDispatchBlocked] = useState('');
+  const [isDispatching, setIsDispatching] = useState(false);
 
   useEffect(() => { alwaysOnRef.current = alwaysOn; }, [alwaysOn]);
   useEffect(() => { wakeWordRef.current = (wakeWord || 'jarvis').toLowerCase().trim(); }, [wakeWord]);
@@ -89,7 +99,7 @@ export default function JarvisAssistant() {
             setTranscript(text);
             setAwake(false);
             awakeRef.current = false;
-            handleVoiceCommand(text);
+            handleVoiceCommandRef.current(text);
             continue;
           }
 
@@ -107,7 +117,7 @@ export default function JarvisAssistant() {
           if (after) {
             // "Jarvis, do X" arrived in one breath — run it now.
             setTranscript(after);
-            handleVoiceCommand(after);
+            handleVoiceCommandRef.current(after);
           } else {
             // Bare wake word — stay awake for the follow-up phrase.
             setAwake(true);
@@ -310,53 +320,133 @@ export default function JarvisAssistant() {
     }
   };
 
-  const handleVoiceCommand = (cmd: string) => {
-    const c = cmd.toLowerCase();
+  const reportDispatchFailure = (error: string) => {
+    setDispatchBlocked(error);
+    setResponse(error);
+    setStatusText(isKillSwitchBlock(error) ? 'KILL SWITCH' : 'FAILED');
+    speak(error);
+  };
 
+  /**
+   * POST the remaining phrase to Next `/api/chat`, which proxies to the
+   * bridge `POST /api/chat/send`. The browser never spawns a CLI. Failures
+   * (including LLM_SPAWN_ENABLED) are shown as-is — never a fabricated reply.
+   */
+  const dispatchToAgentOs = async (cmd: string) => {
+    setIsDispatching(true);
+    setDispatchBlocked('');
+    setStatusText('DISPATCHING...');
+
+    try {
+      const res = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          message: cmd,
+          agentId: 'antigravity',
+          agentName: 'Antigravity',
+          sessionId: sessionIdRef.current,
+        }),
+      });
+
+      const data = (await res.json().catch(() => null)) as
+        | { ok?: boolean; reply?: string; error?: string; reason?: string }
+        | null;
+
+      if (data?.ok && typeof data.reply === 'string' && data.reply.trim()) {
+        setDispatchBlocked('');
+        setResponse(data.reply.trim());
+        speak(data.reply.trim());
+        setStatusText('READY');
+        return;
+      }
+
+      const error =
+        (data && typeof data.error === 'string' && data.error) ||
+        `Dispatch failed (HTTP ${res.status}${data?.reason ? `, ${data.reason}` : ''}). No agent reply.`;
+      reportDispatchFailure(error);
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      reportDispatchFailure(`Could not reach /api/chat (bridge proxy): ${detail}`);
+    } finally {
+      dispatchingRef.current = false;
+      setIsDispatching(false);
+    }
+  };
+
+  const handleVoiceCommand = (cmd: string) => {
+    const trimmed = cmd.trim();
+    if (!trimmed) return;
+
+    if (dispatchingRef.current) {
+      setStatusText('BUSY');
+      return;
+    }
+
+    const c = trimmed.toLowerCase();
+
+    // Local UI navigation only — these do not pretend to be agent replies.
     if (c.includes('globe') || c.includes('vault') || c.includes('3d')) {
-      const reply = 'Navigating to the 3D Obsidian Vault and Hive Mind Globe visualizer right away, sir.';
-      setResponse(reply);
-      speak(reply);
+      const note = 'Opening the 3D vault globe.';
+      setDispatchBlocked('');
+      setResponse(note);
+      speak(note);
       router.push('/globe');
       return;
     }
 
-    if (c.includes('standup') || c.includes('war room')) {
-      const reply = 'Initiating agent team morning standup protocol across all active CLIs.';
-      setResponse(reply);
-      speak(reply);
-      // Dispatch standup to bridge
-      fetch(bridgeUrl('/api/warroom/standup'), { method: 'POST' }).catch(() => {});
-      return;
-    }
-
-    if (c.includes('safety') || c.includes('kill switch') || c.includes('gates')) {
-      const reply = 'Safety posture is nominal. All six DLP exfiltration guard filters and safety kill switches are fully active.';
-      setResponse(reply);
-      speak(reply);
-      return;
-    }
-
-    if (c.includes('status') || c.includes('agents') || c.includes('how are you')) {
-      const reply = 'All eight AI CLI agents are connected and responsive: Antigravity, Claude Code, Codex, Grok, Hermes, OpenClaw, OpenCode, and Pi Agent.';
-      setResponse(reply);
-      speak(reply);
-      return;
-    }
-
     if (c.includes('devices') || c.includes('phone') || c.includes('adb')) {
-      const reply = 'Opening ADB mobile orchestrator for The Hands.';
-      setResponse(reply);
-      speak(reply);
+      const note = 'Opening the ADB device orchestrator.';
+      setDispatchBlocked('');
+      setResponse(note);
+      speak(note);
       router.push('/devices');
       return;
     }
 
-    // Default conversational reply
-    const reply = `Command acknowledged: "${cmd}". Routing instruction to the agent swarm for execution.`;
-    setResponse(reply);
-    speak(reply);
+    // Existing war-room standup path (bridge /api/warroom/standup), not a
+    // fabricated success. Kill-switch refusals surface as-is.
+    if (c.includes('standup') || c.includes('war room')) {
+      dispatchingRef.current = true;
+      setIsDispatching(true);
+      setDispatchBlocked('');
+      setStatusText('DISPATCHING...');
+      void (async () => {
+        try {
+          const res = await fetch(bridgeUrl('/api/warroom/standup'), { method: 'POST' });
+          const data = (await res.json().catch(() => null)) as
+            | { ok?: boolean; message?: string; error?: string }
+            | null;
+          if (res.ok && data?.ok !== false) {
+            const msg =
+              (typeof data?.message === 'string' && data.message.trim()) ||
+              'War room standup convened.';
+            setDispatchBlocked('');
+            setResponse(msg);
+            speak(msg);
+            setStatusText('READY');
+          } else {
+            reportDispatchFailure(
+              (data && typeof data.error === 'string' && data.error) ||
+                `Standup blocked (HTTP ${res.status}).`
+            );
+          }
+        } catch (err) {
+          const detail = err instanceof Error ? err.message : String(err);
+          reportDispatchFailure(`Could not reach war-room standup: ${detail}`);
+        } finally {
+          dispatchingRef.current = false;
+          setIsDispatching(false);
+        }
+      })();
+      return;
+    }
+
+    dispatchingRef.current = true;
+    void dispatchToAgentOs(trimmed);
   };
+
+  handleVoiceCommandRef.current = handleVoiceCommand;
 
   return (
     <>
@@ -417,10 +507,11 @@ export default function JarvisAssistant() {
             </div>
 
             {/* Dialogue Bubble */}
-            <div className="my-4 p-4 bg-black/70 border border-blue-950/80 rounded-2xl text-xs text-gray-200 leading-relaxed font-sans min-h-[70px] flex items-center">
-              <p className="italic">
-                {transcript ? `"${transcript}"` : `"${response}"`}
-              </p>
+            <div className="my-4 p-4 bg-black/70 border border-blue-950/80 rounded-2xl text-xs text-gray-200 leading-relaxed font-sans min-h-[70px] flex flex-col justify-center gap-2">
+              {transcript ? (
+                <p className="text-sky-300/80">You: &ldquo;{transcript}&rdquo;</p>
+              ) : null}
+              <p className="italic">&ldquo;{response}&rdquo;</p>
             </div>
 
             {/* Action Bar (Mic & Audio Output) */}
@@ -495,7 +586,22 @@ export default function JarvisAssistant() {
             {alwaysOn && (
               <p className="text-[10px] text-center text-gray-600 font-mono mb-2">
                 Speech is processed by your browser. Nothing is sent anywhere until
-                &ldquo;{wakeWord}&rdquo; is heard.
+                &ldquo;{wakeWord}&rdquo; is heard. After that the remaining phrase
+                is POSTed to /api/chat (bridge /api/chat/send).
+              </p>
+            )}
+
+            {dispatchBlocked && (
+              <p className="text-[10px] text-center text-rose-400 font-mono mb-2 px-2 leading-relaxed">
+                {isKillSwitchBlock(dispatchBlocked)
+                  ? `Kill switch blocked this send (LLM_SPAWN_ENABLED etc.): ${dispatchBlocked}`
+                  : `Send failed: ${dispatchBlocked}`}
+              </p>
+            )}
+
+            {isDispatching && !dispatchBlocked && (
+              <p className="text-[10px] text-center text-sky-500 font-mono mb-2">
+                Dispatching remaining phrase to Agent OS via /api/chat…
               </p>
             )}
 
@@ -507,28 +613,32 @@ export default function JarvisAssistant() {
               <div className="grid grid-cols-2 gap-2 text-xs">
                 <button
                   onClick={() => handleVoiceCommand('Run standup')}
-                  className="p-2 rounded-xl bg-[#091224] border border-blue-900/40 text-sky-300 hover:border-sky-500/50 hover:bg-blue-900/20 text-left transition flex items-center gap-1.5"
+                  disabled={isDispatching}
+                  className="p-2 rounded-xl bg-[#091224] border border-blue-900/40 text-sky-300 hover:border-sky-500/50 hover:bg-blue-900/20 text-left transition flex items-center gap-1.5 disabled:opacity-50"
                 >
                   <Activity className="w-3.5 h-3.5 text-sky-400 shrink-0" />
                   <span className="truncate">"Run standup"</span>
                 </button>
                 <button
                   onClick={() => handleVoiceCommand('Show 3D vault globe')}
-                  className="p-2 rounded-xl bg-[#091224] border border-blue-900/40 text-purple-300 hover:border-purple-500/50 hover:bg-purple-900/20 text-left transition flex items-center gap-1.5"
+                  disabled={isDispatching}
+                  className="p-2 rounded-xl bg-[#091224] border border-blue-900/40 text-purple-300 hover:border-purple-500/50 hover:bg-purple-900/20 text-left transition flex items-center gap-1.5 disabled:opacity-50"
                 >
                   <Globe className="w-3.5 h-3.5 text-purple-400 shrink-0" />
                   <span className="truncate">"Show 3D globe"</span>
                 </button>
                 <button
                   onClick={() => handleVoiceCommand('Check safety gates')}
-                  className="p-2 rounded-xl bg-[#091224] border border-blue-900/40 text-emerald-300 hover:border-emerald-500/50 hover:bg-emerald-900/20 text-left transition flex items-center gap-1.5"
+                  disabled={isDispatching}
+                  className="p-2 rounded-xl bg-[#091224] border border-blue-900/40 text-emerald-300 hover:border-emerald-500/50 hover:bg-emerald-900/20 text-left transition flex items-center gap-1.5 disabled:opacity-50"
                 >
                   <Shield className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
                   <span className="truncate">"Check safety gates"</span>
                 </button>
                 <button
                   onClick={() => handleVoiceCommand('System status')}
-                  className="p-2 rounded-xl bg-[#091224] border border-blue-900/40 text-amber-300 hover:border-amber-500/50 hover:bg-amber-900/20 text-left transition flex items-center gap-1.5"
+                  disabled={isDispatching}
+                  className="p-2 rounded-xl bg-[#091224] border border-blue-900/40 text-amber-300 hover:border-amber-500/50 hover:bg-amber-900/20 text-left transition flex items-center gap-1.5 disabled:opacity-50"
                 >
                   <Terminal className="w-3.5 h-3.5 text-amber-400 shrink-0" />
                   <span className="truncate">"System status"</span>

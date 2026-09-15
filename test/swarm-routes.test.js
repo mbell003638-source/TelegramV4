@@ -89,6 +89,9 @@ function makeInstanceSync(overrides = {}) {
         peerForToken: (presented) => (presented === PEER_TOKEN
             ? { id: 'laptop', url: 'http://laptop:3141', scopes: ['memories', 'skills'] }
             : null),
+        peerForId: (id) => (id === 'laptop'
+            ? { id: 'laptop', url: 'http://laptop:3141', scopes: ['memories', 'skills'] }
+            : null),
         verifySharedSecret: (presented) => presented === SHARED_SECRET,
         export: () => ({ instanceId: 'local', counts: { memories: 0, skills: 0, config: 0 } }),
         import: () => ({ ok: true, from: 'laptop' }),
@@ -699,13 +702,46 @@ test('GET /api/instance/export does NOT accept the dashboard token', async () =>
     assert.equal(viaQuery.ctx.instanceSync.lastCall('export'), undefined);
 });
 
-test('GET /api/instance/export accepts the shared secret as the bootstrap path', async () => {
+test('GET /api/instance/export accepts the shared secret only for a registered peer', async () => {
     const { sent, ctx } = await hit('/api/instance/export', {
-        headers: { 'x-instance-secret': SHARED_SECRET, 'x-instance-id': 'desktop' },
+        headers: { 'x-instance-secret': SHARED_SECRET, 'x-instance-id': 'laptop' },
         query: { scopes: 'memories,skills' },
     });
     assert.equal(sent.status, 200);
     assert.deepEqual(ctx.instanceSync.lastCall('export')[1].scopes, ['memories', 'skills']);
+});
+
+test('GET /api/instance/export 401s a valid shared secret from an unknown device id', async () => {
+    for (const headers of [
+        { 'x-instance-secret': SHARED_SECRET },
+        { 'x-instance-secret': SHARED_SECRET, 'x-instance-id': '' },
+        { 'x-instance-secret': SHARED_SECRET, 'x-instance-id': 'desktop' },
+        { 'x-instance-token': SHARED_SECRET, 'x-instance-id': 'stranger' },
+    ]) {
+        const { sent, ctx } = await hit('/api/instance/export', { headers });
+        assert.equal(sent.status, 401, `headers ${JSON.stringify(headers)} should 401`);
+        assert.equal(ctx.instanceSync.lastCall('export'), undefined, 'export must not run');
+    }
+});
+
+test('GET /api/instance/export shared-secret bootstrap is still clamped to the peer grant', async () => {
+    const { ctx } = await hit('/api/instance/export', {
+        headers: { 'x-instance-secret': SHARED_SECRET, 'x-instance-id': 'laptop' },
+        query: { scopes: 'memories,config' },
+    });
+    assert.deepEqual(ctx.instanceSync.lastCall('export')[1].scopes, ['memories']);
+});
+
+test('a registered peer with no scopes exports nothing even with the shared secret', async () => {
+    const silent = makeInstanceSync({
+        peerForId: (id) => (id === 'silent' ? { id: 'silent', scopes: [] } : null),
+    });
+    const { sent, ctx } = await hit('/api/instance/export', {
+        instanceSync: silent,
+        headers: { 'x-instance-secret': SHARED_SECRET, 'x-instance-id': 'silent' },
+    });
+    assert.equal(sent.status, 200);
+    assert.deepEqual(ctx.instanceSync.lastCall('export')[1].scopes, []);
 });
 
 test('POST /api/instance/import accepts a valid peer token and clamps the scopes', async () => {

@@ -234,10 +234,13 @@ function requestMaster(pathName, method = 'GET', data = null) {
 }
 
 /**
- * Main polling loop.
+ * Main loop: enroll with the master, then long-poll for work.
+ *
+ * The VPS cannot open a connection to this machine. We have to dial out.
  */
 async function startPollingLoop() {
     let currentDelay = config.reconnectDelayMs;
+    let registered = false;
 
     while (true) {
         try {
@@ -247,6 +250,22 @@ async function startPollingLoop() {
                 platform: os.platform(),
                 systemInfo: getSystemMetrics(),
             };
+
+            if (!registered) {
+                const reg = await requestMaster('/api/satellite/register', 'POST', payload);
+                if (reg.statusCode === 401) {
+                    console.error('❌ [Worker] Master rejected authentication token. Check satelliteKey in config.json or SATELLITE_KEY env.');
+                    await new Promise(r => setTimeout(r, 10000));
+                    continue;
+                }
+                if (reg.statusCode >= 200 && reg.statusCode < 300) {
+                    registered = true;
+                    console.log(`✅ [Worker] Registered with master as ${config.satelliteId}`);
+                } else if (reg.statusCode === 404) {
+                    // Older master without /register — poll still enrolls.
+                    registered = true;
+                }
+            }
 
             const res = await requestMaster('/api/satellite/poll', 'POST', payload);
 

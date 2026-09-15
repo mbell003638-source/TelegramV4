@@ -18,6 +18,7 @@ import {
 } from 'lucide-react';
 import { AgentInfo } from '@/lib/types';
 import { BRIDGE_TOKEN, BRIDGE_PORT, bridgeUrl } from '@/lib/config';
+import AgentOverrideToggles from '@/components/AgentOverrideToggles';
 
 export default function SettingsPage() {
   const [vaultPath, setVaultPath] = useState('');
@@ -113,7 +114,7 @@ export default function SettingsPage() {
             System Architecture &amp; Settings
           </h1>
           <p className="text-xs text-gray-400 mt-1">
-            Configure Obsidian Second Brain persistence, inspect discovered AI binaries, and monitor bridge status.
+            Configure Obsidian persistence, route each agent through the OmniRouter master key, inspect local CLIs, and monitor the bridge.
           </p>
         </div>
       </div>
@@ -182,6 +183,9 @@ export default function SettingsPage() {
           </div>
         </div>
       </div>
+
+      {/* Per-agent OmniRouter key — one switch each, never a master */}
+      <AgentOverrideToggles />
 
       {/* Local Agent Binary Scanner */}
       <div className="glass-card p-6 rounded-2xl border border-blue-900/40 space-y-4">

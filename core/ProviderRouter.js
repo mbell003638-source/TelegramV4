@@ -74,6 +74,680 @@ function emptyBucket() {
     return { requests: 0, promptTokens: 0, completionTokens: 0, totalTokens: 0, costUsd: 0 };
 }
 
+function isRec(value) {
+    return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function newWireId(prefix) {
+    return `${prefix}_${crypto.randomBytes(12).toString('hex')}`;
+}
+
+function flattenText(content) {
+    if (content == null) return '';
+    if (typeof content === 'string') return content;
+    if (Array.isArray(content)) {
+        const parts = [];
+        for (const part of content) {
+            if (typeof part === 'string') parts.push(part);
+            else if (isRec(part) && typeof part.text === 'string') parts.push(part.text);
+            else if (isRec(part) && typeof part.thinking === 'string') parts.push(part.thinking);
+            else if (isRec(part) && part.type === 'tool_result') parts.push(flattenText(part.content));
+        }
+        return parts.filter(Boolean).join('\n');
+    }
+    if (isRec(content) && typeof content.text === 'string') return content.text;
+    return '';
+}
+
+function openaiContentToText(content) {
+    if (content == null) return '';
+    if (typeof content === 'string') return content;
+    if (!Array.isArray(content)) return '';
+    const parts = [];
+    for (const part of content) {
+        if (typeof part === 'string') parts.push(part);
+        else if (isRec(part) && typeof part.text === 'string') parts.push(part.text);
+    }
+    return parts.join('');
+}
+
+function imageUrlFromAnthropicBlock(block) {
+    if (!isRec(block) || block.type !== 'image') return null;
+    const source = block.source;
+    if (!isRec(source)) return null;
+    if (source.type === 'base64' && typeof source.data === 'string') {
+        const media = typeof source.media_type === 'string' ? source.media_type : 'image/png';
+        return `data:${media};base64,${source.data}`;
+    }
+    if (source.type === 'url' && typeof source.url === 'string') return source.url;
+    return null;
+}
+
+function finishToStopReason(finish, hasToolUse) {
+    if (finish === 'length') return 'max_tokens';
+    if (finish === 'tool_calls') return 'tool_use';
+    if (finish === 'content_filter') return 'refusal';
+    if (hasToolUse) return 'tool_use';
+    return 'end_turn';
+}
+
+function anthropicToolsToOpenAI(tools) {
+    if (!Array.isArray(tools)) return undefined;
+    const out = [];
+    for (const tool of tools) {
+        if (!isRec(tool)) continue;
+        if (tool.type === 'function' && isRec(tool.function)) {
+            out.push(tool);
+            continue;
+        }
+        const name = tool.name || (tool.function && tool.function.name);
+        if (!name) continue;
+        out.push({
+            type: 'function',
+            function: {
+                name,
+                description: tool.description || '',
+                parameters: tool.input_schema || tool.parameters || { type: 'object', properties: {} },
+            },
+        });
+    }
+    return out.length ? out : undefined;
+}
+
+function anthropicToolChoiceToOpenAI(choice) {
+    if (choice == null) return undefined;
+    if (choice === 'auto' || choice === 'none') return choice;
+    if (choice === 'any' || choice === 'required') return 'required';
+    if (isRec(choice) && (choice.type === 'tool' || choice.type === 'function')) {
+        const name = choice.name || (choice.function && choice.function.name);
+        if (name) return { type: 'function', function: { name } };
+    }
+    return undefined;
+}
+
+function responsesToolsToOpenAI(tools) {
+    if (!Array.isArray(tools)) return undefined;
+    const out = [];
+    for (const tool of tools) {
+        if (!isRec(tool)) continue;
+        if (tool.type === 'function' && isRec(tool.function)) {
+            out.push(tool);
+            continue;
+        }
+        if (tool.type === 'function' || typeof tool.name === 'string') {
+            out.push({
+                type: 'function',
+                function: {
+                    name: tool.name || '',
+                    description: tool.description || '',
+                    parameters: tool.parameters || { type: 'object', properties: {} },
+                },
+            });
+        }
+    }
+    return out.length ? out : undefined;
+}
+
+/** Anthropic Messages request → OpenAI chat.completions body. */
+function anthropicMessagesToChat(body = {}) {
+    const messages = [];
+    const systemText = flattenText(body.system);
+    if (systemText) messages.push({ role: 'system', content: systemText });
+
+    const incoming = Array.isArray(body.messages) ? body.messages : [];
+    for (const msg of incoming) {
+        if (!isRec(msg)) continue;
+        const role = msg.role === 'assistant' ? 'assistant'
+            : msg.role === 'system' ? 'system'
+            : 'user';
+        const content = msg.content;
+
+        if (typeof content === 'string') {
+            messages.push({ role, content });
+            continue;
+        }
+        if (!Array.isArray(content)) {
+            const text = flattenText(content);
+            if (text || role === 'assistant') messages.push({ role, content: text });
+            continue;
+        }
+
+        if (role === 'assistant') {
+            const texts = [];
+            const toolCalls = [];
+            for (const block of content) {
+                if (!isRec(block)) continue;
+                if (block.type === 'text' && typeof block.text === 'string') texts.push(block.text);
+                else if (block.type === 'thinking' && typeof block.thinking === 'string') texts.push(block.thinking);
+                else if (block.type === 'tool_use') {
+                    let args = '{}';
+                    try { args = JSON.stringify(block.input ?? {}); } catch (e) { args = '{}'; }
+                    toolCalls.push({
+                        id: typeof block.id === 'string' && block.id ? block.id : `call_${crypto.randomBytes(8).toString('hex')}`,
+                        type: 'function',
+                        function: { name: block.name || '', arguments: args },
+                    });
+                }
+            }
+            const openaiMsg = { role: 'assistant', content: texts.join('\n') || (toolCalls.length ? null : '') };
+            if (toolCalls.length) openaiMsg.tool_calls = toolCalls;
+            messages.push(openaiMsg);
+            continue;
+        }
+
+        const parts = [];
+        const flushParts = () => {
+            if (!parts.length) return;
+            if (parts.length === 1 && parts[0].type === 'text') {
+                messages.push({ role, content: parts[0].text });
+            } else {
+                messages.push({ role, content: parts.slice() });
+            }
+            parts.length = 0;
+        };
+        for (const block of content) {
+            if (!isRec(block)) continue;
+            if (block.type === 'tool_result') {
+                flushParts();
+                messages.push({
+                    role: 'tool',
+                    tool_call_id: block.tool_use_id || '',
+                    content: typeof block.content === 'string' ? block.content : flattenText(block.content),
+                });
+                continue;
+            }
+            if (block.type === 'text' && typeof block.text === 'string') {
+                parts.push({ type: 'text', text: block.text });
+                continue;
+            }
+            const imageUrl = imageUrlFromAnthropicBlock(block);
+            if (imageUrl) parts.push({ type: 'image_url', image_url: { url: imageUrl } });
+        }
+        flushParts();
+    }
+
+    const chat = { model: body.model, messages };
+    if (body.max_tokens != null) chat.max_tokens = body.max_tokens;
+    if (body.temperature != null) chat.temperature = body.temperature;
+    if (body.top_p != null) chat.top_p = body.top_p;
+    if (body.stop_sequences != null) chat.stop = body.stop_sequences;
+    const tools = anthropicToolsToOpenAI(body.tools);
+    if (tools) chat.tools = tools;
+    const toolChoice = anthropicToolChoiceToOpenAI(body.tool_choice);
+    if (toolChoice) chat.tool_choice = toolChoice;
+    if (Array.isArray(body.models)) chat.models = body.models;
+    return chat;
+}
+
+/** OpenAI chat.completion → Anthropic Messages response. */
+function chatToAnthropicMessage(data, fallbackModel) {
+    const choice = data && Array.isArray(data.choices) ? data.choices[0] : null;
+    const message = (choice && choice.message) || {};
+    const content = [];
+    const text = openaiContentToText(message.content);
+    if (text) content.push({ type: 'text', text });
+    if (Array.isArray(message.tool_calls)) {
+        for (const call of message.tool_calls) {
+            if (!isRec(call)) continue;
+            const fn = isRec(call.function) ? call.function : {};
+            let input = {};
+            if (typeof fn.arguments === 'string' && fn.arguments) {
+                try { input = JSON.parse(fn.arguments); } catch (e) { input = {}; }
+            } else if (isRec(fn.arguments)) {
+                input = fn.arguments;
+            }
+            content.push({
+                type: 'tool_use',
+                id: call.id || newWireId('toolu'),
+                name: fn.name || call.name || '',
+                input,
+            });
+        }
+    }
+    if (!content.length) content.push({ type: 'text', text: '' });
+
+    const usage = (data && data.usage) || {};
+    const hasToolUse = content.some(block => block.type === 'tool_use');
+    return {
+        id: (data && data.id) || newWireId('msg'),
+        type: 'message',
+        role: 'assistant',
+        content,
+        model: (data && data.model) || fallbackModel || '',
+        stop_reason: finishToStopReason(choice && choice.finish_reason, hasToolUse),
+        stop_sequence: null,
+        usage: {
+            input_tokens: Number(usage.prompt_tokens ?? usage.input_tokens ?? 0) || 0,
+            output_tokens: Number(usage.completion_tokens ?? usage.output_tokens ?? 0) || 0,
+        },
+    };
+}
+
+function responsesInputToMessages(input, messages) {
+    if (typeof input === 'string') {
+        if (input) messages.push({ role: 'user', content: input });
+        return;
+    }
+    if (!Array.isArray(input)) return;
+    for (const item of input) {
+        if (typeof item === 'string') {
+            if (item) messages.push({ role: 'user', content: item });
+            continue;
+        }
+        if (!isRec(item)) continue;
+        const type = item.type;
+
+        if (type === 'function_call') {
+            let args = item.arguments;
+            if (typeof args !== 'string') {
+                try { args = JSON.stringify(args ?? {}); } catch (e) { args = '{}'; }
+            }
+            messages.push({
+                role: 'assistant',
+                content: null,
+                tool_calls: [{
+                    id: item.call_id || item.id || newWireId('call'),
+                    type: 'function',
+                    function: { name: item.name || '', arguments: args || '{}' },
+                }],
+            });
+            continue;
+        }
+        if (type === 'function_call_output' || type === 'tool_result') {
+            messages.push({
+                role: 'tool',
+                tool_call_id: item.call_id || item.tool_use_id || '',
+                content: typeof item.output === 'string' ? item.output
+                    : typeof item.content === 'string' ? item.content
+                    : flattenText(item.output || item.content),
+            });
+            continue;
+        }
+        if (type === 'input_text' && typeof item.text === 'string') {
+            messages.push({ role: 'user', content: item.text });
+            continue;
+        }
+
+        if (type === 'message' || item.role) {
+            const role = item.role === 'assistant' ? 'assistant'
+                : item.role === 'system' || item.role === 'developer' ? 'system'
+                : item.role === 'tool' ? 'tool'
+                : 'user';
+            const content = item.content;
+            if (typeof content === 'string') {
+                const msg = { role, content };
+                if (role === 'tool') msg.tool_call_id = item.call_id || item.tool_call_id || '';
+                messages.push(msg);
+                continue;
+            }
+            if (!Array.isArray(content)) {
+                const text = flattenText(content);
+                if (text) messages.push({ role, content: text });
+                continue;
+            }
+            const parts = [];
+            for (const part of content) {
+                if (typeof part === 'string') {
+                    parts.push({ type: 'text', text: part });
+                    continue;
+                }
+                if (!isRec(part)) continue;
+                if ((part.type === 'input_text' || part.type === 'output_text' || part.type === 'text') && typeof part.text === 'string') {
+                    parts.push({ type: 'text', text: part.text });
+                    continue;
+                }
+                if (part.type === 'input_image' || part.type === 'image_url') {
+                    const url = typeof part.image_url === 'string' ? part.image_url
+                        : (isRec(part.image_url) && typeof part.image_url.url === 'string') ? part.image_url.url
+                        : null;
+                    if (url) parts.push({ type: 'image_url', image_url: { url } });
+                }
+            }
+            if (!parts.length) continue;
+            if (parts.length === 1 && parts[0].type === 'text') messages.push({ role, content: parts[0].text });
+            else messages.push({ role, content: parts });
+        }
+    }
+}
+
+/** OpenAI Responses request → OpenAI chat.completions body. */
+function responsesToChat(body = {}) {
+    const messages = [];
+    const instructions = flattenText(body.instructions);
+    if (instructions) messages.push({ role: 'system', content: instructions });
+    responsesInputToMessages(body.input, messages);
+
+    const chat = { model: body.model, messages };
+    if (body.max_output_tokens != null) chat.max_tokens = body.max_output_tokens;
+    else if (body.max_tokens != null) chat.max_tokens = body.max_tokens;
+    if (body.temperature != null) chat.temperature = body.temperature;
+    if (body.top_p != null) chat.top_p = body.top_p;
+    const tools = responsesToolsToOpenAI(body.tools);
+    if (tools) chat.tools = tools;
+    if (body.tool_choice != null) chat.tool_choice = body.tool_choice;
+    if (Array.isArray(body.models)) chat.models = body.models;
+    return chat;
+}
+
+/** OpenAI chat.completion → OpenAI Responses object. */
+function chatToResponses(data, fallbackModel) {
+    const choice = data && Array.isArray(data.choices) ? data.choices[0] : null;
+    const message = (choice && choice.message) || {};
+    const output = [];
+    const text = openaiContentToText(message.content);
+    if (text) {
+        output.push({
+            id: newWireId('msg'),
+            type: 'message',
+            status: 'completed',
+            role: 'assistant',
+            content: [{ type: 'output_text', text, annotations: [] }],
+        });
+    }
+    if (Array.isArray(message.tool_calls)) {
+        for (const call of message.tool_calls) {
+            if (!isRec(call)) continue;
+            const fn = isRec(call.function) ? call.function : {};
+            output.push({
+                type: 'function_call',
+                id: call.id || newWireId('fc'),
+                call_id: call.id || newWireId('call'),
+                name: fn.name || '',
+                arguments: typeof fn.arguments === 'string' ? fn.arguments : JSON.stringify(fn.arguments || {}),
+                status: 'completed',
+            });
+        }
+    }
+    if (!output.length) {
+        output.push({
+            id: newWireId('msg'),
+            type: 'message',
+            status: 'completed',
+            role: 'assistant',
+            content: [{ type: 'output_text', text: '', annotations: [] }],
+        });
+    }
+
+    const usage = (data && data.usage) || {};
+    const inputTokens = Number(usage.prompt_tokens ?? usage.input_tokens ?? 0) || 0;
+    const outputTokens = Number(usage.completion_tokens ?? usage.output_tokens ?? 0) || 0;
+    const rawId = data && data.id ? String(data.id) : '';
+    const id = rawId ? rawId.replace(/^chatcmpl[-_]?/, 'resp_') : newWireId('resp');
+    return {
+        id,
+        object: 'response',
+        created_at: Math.floor(Date.now() / 1000),
+        status: (choice && choice.finish_reason === 'length') ? 'incomplete' : 'completed',
+        error: null,
+        model: (data && data.model) || fallbackModel || '',
+        output,
+        usage: {
+            input_tokens: inputTokens,
+            output_tokens: outputTokens,
+            total_tokens: Number(usage.total_tokens ?? 0) || (inputTokens + outputTokens),
+        },
+    };
+}
+
+function sseFramesForAnthropic(message) {
+    const frames = [];
+    frames.push({ event: 'message_start', data: { type: 'message_start', message: { ...message, content: [], stop_reason: null } } });
+    (message.content || []).forEach((block, index) => {
+        if (block.type === 'text') {
+            frames.push({ event: 'content_block_start', data: { type: 'content_block_start', index, content_block: { type: 'text', text: '' } } });
+            frames.push({ event: 'content_block_delta', data: { type: 'content_block_delta', index, delta: { type: 'text_delta', text: block.text || '' } } });
+        } else if (block.type === 'tool_use') {
+            frames.push({ event: 'content_block_start', data: { type: 'content_block_start', index, content_block: { type: 'tool_use', id: block.id, name: block.name, input: {} } } });
+            frames.push({ event: 'content_block_delta', data: { type: 'content_block_delta', index, delta: { type: 'input_json_delta', partial_json: JSON.stringify(block.input || {}) } } });
+        } else {
+            frames.push({ event: 'content_block_start', data: { type: 'content_block_start', index, content_block: block } });
+        }
+        frames.push({ event: 'content_block_stop', data: { type: 'content_block_stop', index } });
+    });
+    frames.push({
+        event: 'message_delta',
+        data: {
+            type: 'message_delta',
+            delta: { stop_reason: message.stop_reason, stop_sequence: null },
+            usage: { output_tokens: (message.usage && message.usage.output_tokens) || 0 },
+        },
+    });
+    frames.push({ event: 'message_stop', data: { type: 'message_stop' } });
+    return frames;
+}
+
+function sseFramesForResponses(payload) {
+    const frames = [];
+    frames.push({ event: 'response.created', data: { type: 'response.created', response: { ...payload, status: 'in_progress', output: [] } } });
+    for (const item of payload.output || []) {
+        if (item.type !== 'message') continue;
+        for (const part of item.content || []) {
+            if (part.type === 'output_text' && part.text) {
+                frames.push({ event: 'response.output_text.delta', data: { type: 'response.output_text.delta', delta: part.text } });
+            }
+        }
+    }
+    frames.push({ event: 'response.completed', data: { type: 'response.completed', response: payload } });
+    return frames;
+}
+
+function writeSseEvent(res, event, data) {
+    if (event) res.write(`event: ${event}\n`);
+    res.write(`data: ${typeof data === 'string' ? data : JSON.stringify(data)}\n\n`);
+}
+
+function finishReasonToAnthropic(reason) {
+    if (reason === 'length') return 'max_tokens';
+    if (reason === 'tool_calls' || reason === 'function_call') return 'tool_use';
+    return 'end_turn';
+}
+
+/**
+ * Parse an OpenAI chat.completion SSE Readable and fire token callbacks.
+ * Used to translate `/v1/messages` and `/v1/responses` streams token-by-token
+ * instead of buffering the whole reply.
+ *
+ * @param {import('stream').Readable} stream
+ * @param {{ onStart?: Function, onText?: Function, onDone?: Function }} hooks
+ */
+function pipeOpenAiSse(stream, hooks = {}) {
+    return new Promise((resolve, reject) => {
+        if (!stream || typeof stream.on !== 'function') {
+            const err = new Error('upstream stream is not readable');
+            if (typeof hooks.onDone === 'function') {
+                try { hooks.onDone({ finish: null, error: err }); } catch (e) { /* ignore */ }
+            }
+            return reject(err);
+        }
+
+        let buf = '';
+        let started = false;
+        let finish = null;
+        let settled = false;
+
+        const finishOnce = (error) => {
+            if (settled) return;
+            settled = true;
+            if (typeof hooks.onDone === 'function') {
+                try { hooks.onDone({ finish, error: error || null }); } catch (e) { /* ignore */ }
+            }
+            if (error) reject(error);
+            else resolve({ finish });
+        };
+
+        const consumeBlock = (raw) => {
+            const data = raw.split(/\r?\n/)
+                .filter((line) => line.startsWith('data:'))
+                .map((line) => line.slice(5).trimStart())
+                .join('');
+            if (!data) return;
+            if (data === '[DONE]') {
+                finishOnce(null);
+                if (typeof stream.destroy === 'function') {
+                    try { stream.destroy(); } catch (e) { /* ignore */ }
+                }
+                return;
+            }
+            let json;
+            try { json = JSON.parse(data); } catch (e) { return; }
+            if (!started) {
+                started = true;
+                if (typeof hooks.onStart === 'function') hooks.onStart(json);
+            }
+            const choice = Array.isArray(json.choices) ? json.choices[0] : null;
+            const delta = (choice && choice.delta) || {};
+            if (typeof delta.content === 'string' && delta.content) {
+                if (typeof hooks.onText === 'function') hooks.onText(delta.content, json);
+            }
+            if (choice && choice.finish_reason) finish = choice.finish_reason;
+        };
+
+        stream.on('data', (chunk) => {
+            if (settled) return;
+            buf += Buffer.isBuffer(chunk) ? chunk.toString('utf8') : String(chunk);
+            buf = buf.replace(/\r\n/g, '\n');
+            let idx;
+            while ((idx = buf.indexOf('\n\n')) !== -1) {
+                const raw = buf.slice(0, idx);
+                buf = buf.slice(idx + 2);
+                try { consumeBlock(raw); } catch (err) { finishOnce(err); return; }
+                if (settled) return;
+            }
+        });
+        stream.on('end', () => {
+            if (buf.trim() && !settled) {
+                try { consumeBlock(buf); } catch (err) { return finishOnce(err); }
+            }
+            finishOnce(null);
+        });
+        stream.on('error', (err) => finishOnce(err));
+    });
+}
+
+function pipeOpenAiSseToAnthropic(stream, res, { model, id } = {}) {
+    let opened = false;
+    return pipeOpenAiSse(stream, {
+        onStart(json) {
+            opened = true;
+            writeSseEvent(res, 'message_start', {
+                type: 'message_start',
+                message: {
+                    id: (json && json.id) ? String(json.id).replace(/^chatcmpl[-_]?/, 'msg_') : (id || newWireId('msg')),
+                    type: 'message',
+                    role: 'assistant',
+                    model: (json && json.model) || model || '',
+                    content: [],
+                    stop_reason: null,
+                    usage: { input_tokens: 0, output_tokens: 0 },
+                },
+            });
+            writeSseEvent(res, 'content_block_start', {
+                type: 'content_block_start',
+                index: 0,
+                content_block: { type: 'text', text: '' },
+            });
+        },
+        onText(text) {
+            if (!opened) return;
+            writeSseEvent(res, 'content_block_delta', {
+                type: 'content_block_delta',
+                index: 0,
+                delta: { type: 'text_delta', text },
+            });
+        },
+        onDone({ finish }) {
+            if (!opened) {
+                writeSseEvent(res, 'message_start', {
+                    type: 'message_start',
+                    message: {
+                        id: id || newWireId('msg'),
+                        type: 'message',
+                        role: 'assistant',
+                        model: model || '',
+                        content: [],
+                        stop_reason: null,
+                        usage: { input_tokens: 0, output_tokens: 0 },
+                    },
+                });
+                writeSseEvent(res, 'content_block_start', {
+                    type: 'content_block_start',
+                    index: 0,
+                    content_block: { type: 'text', text: '' },
+                });
+            }
+            writeSseEvent(res, 'content_block_stop', { type: 'content_block_stop', index: 0 });
+            writeSseEvent(res, 'message_delta', {
+                type: 'message_delta',
+                delta: { stop_reason: finishReasonToAnthropic(finish), stop_sequence: null },
+                usage: { output_tokens: 0 },
+            });
+            writeSseEvent(res, 'message_stop', { type: 'message_stop' });
+        },
+    });
+}
+
+function pipeOpenAiSseToResponses(stream, res, { model, id } = {}) {
+    const responseId = id || newWireId('resp');
+    let opened = false;
+    let text = '';
+    return pipeOpenAiSse(stream, {
+        onStart(json) {
+            opened = true;
+            writeSseEvent(res, 'response.created', {
+                type: 'response.created',
+                response: {
+                    id: (json && json.id) ? String(json.id).replace(/^chatcmpl[-_]?/, 'resp_') : responseId,
+                    object: 'response',
+                    status: 'in_progress',
+                    model: (json && json.model) || model || '',
+                    output: [],
+                },
+            });
+        },
+        onText(delta) {
+            if (!opened) return;
+            text += delta;
+            writeSseEvent(res, 'response.output_text.delta', {
+                type: 'response.output_text.delta',
+                delta,
+            });
+        },
+        onDone({ finish }) {
+            const rid = responseId;
+            if (!opened) {
+                writeSseEvent(res, 'response.created', {
+                    type: 'response.created',
+                    response: { id: rid, object: 'response', status: 'in_progress', model: model || '', output: [] },
+                });
+            }
+            const completed = {
+                id: rid,
+                object: 'response',
+                status: finish === 'length' ? 'incomplete' : 'completed',
+                model: model || '',
+                output: [{
+                    type: 'message',
+                    role: 'assistant',
+                    content: [{ type: 'output_text', text }],
+                }],
+            };
+            writeSseEvent(res, 'response.completed', { type: 'response.completed', response: completed });
+        },
+    });
+}
+
+/** Bearer first, then x-api-key — Claude Code talks to the gateway with Bearer. */
+function presentedMasterKey(req) {
+    const auth = String((req && req.headers && req.headers.authorization) || '');
+    if (auth.startsWith('Bearer ')) {
+        const token = auth.slice(7).trim();
+        if (token) return token;
+    }
+    const header = req && req.headers && req.headers['x-api-key'];
+    const xKey = Array.isArray(header) ? header[0] : header;
+    return typeof xKey === 'string' ? xKey.trim() : '';
+}
+
 class ProviderRouter {
     /**
      * @param {object}   opts
@@ -657,14 +1331,20 @@ class ProviderRouter {
      * @returns {(req: import('http').IncomingMessage, res: import('http').ServerResponse) => boolean}
      *          true when the request was handled (caller should stop), false otherwise.
      *
-     *   POST /v1/chat/completions
+     *   POST /v1/chat/completions   OpenAI Chat Completions (passthrough; SSE if stream)
+     *   POST /v1/messages           Anthropic Messages (translated via chatCompletion)
+     *   POST /v1/responses           OpenAI Responses (translated via chatCompletion)
      *   GET  /v1/models
      *   GET  /v1/usage
      *
-     * All require `Authorization: Bearer <masterKey>`.
+     * Auth: `Authorization: Bearer <masterKey>` or `x-api-key: <masterKey>`.
+     * Translated routes request an upstream OpenAI SSE when the client sets
+     * `stream: true`, then re-emit Anthropic / Responses events token-by-token.
+     * If the upstream does not return a stream, they fall back to a one-shot
+     * SSE of the completed payload.
      */
     createHttpHandler() {
-        const routes = new Set(['/v1/chat/completions', '/v1/models', '/v1/usage']);
+        const routes = new Set(['/v1/chat/completions', '/v1/messages', '/v1/responses', '/v1/models', '/v1/usage']);
 
         const send = (res, status, payload, extraHeaders = {}) => {
             try {
@@ -703,9 +1383,7 @@ class ProviderRouter {
             }
             if (!routes.has(pathname)) return false;
 
-            const auth = String(req.headers.authorization || '');
-            const presented = auth.startsWith('Bearer ') ? auth.slice(7).trim() : '';
-            if (!this.verifyMasterKey(presented)) {
+            if (!this.verifyMasterKey(presentedMasterKey(req))) {
                 fail(res, 401, 'Invalid OmniRouter master key.', 'invalid_api_key');
                 return true;
             }
@@ -730,7 +1408,7 @@ class ProviderRouter {
                 return true;
             }
 
-            // POST /v1/chat/completions
+            // POST /v1/chat/completions | /v1/messages | /v1/responses
             if (method !== 'POST') { fail(res, 405, 'Method not allowed.', 'method_not_allowed'); return true; }
             readBody(req)
                 .then(async raw => {
@@ -740,8 +1418,75 @@ class ProviderRouter {
                     } catch (err) {
                         return fail(res, 400, 'Request body is not valid JSON.', 'invalid_json');
                     }
+                    const metaOf = result => ({ 'x-omnirouter-provider': result.providerId, 'x-omnirouter-model': result.model });
+                    const writeSse = (frames, extraHeaders = {}) => {
+                        try {
+                            if (res.headersSent) return;
+                            res.writeHead(200, {
+                                'Content-Type': 'text/event-stream',
+                                'Cache-Control': 'no-cache',
+                                Connection: 'keep-alive',
+                                ...extraHeaders,
+                            });
+                            for (const frame of frames) {
+                                if (frame.event) res.write(`event: ${frame.event}\n`);
+                                res.write(`data: ${typeof frame.data === 'string' ? frame.data : JSON.stringify(frame.data)}\n\n`);
+                            }
+                            res.end();
+                        } catch (err) {
+                            console.warn('[ProviderRouter] Failed to write SSE:', err.message);
+                        }
+                    };
+
+                    if (pathname === '/v1/messages') {
+                        const wantStream = body.stream === true;
+                        const result = await this.chatCompletion({
+                            ...anthropicMessagesToChat(body),
+                            stream: wantStream,
+                        });
+                        if (wantStream && result.stream) {
+                            if (!res.headersSent) {
+                                res.writeHead(200, {
+                                    'Content-Type': 'text/event-stream',
+                                    'Cache-Control': 'no-cache',
+                                    Connection: 'keep-alive',
+                                    ...metaOf(result),
+                                });
+                            }
+                            await pipeOpenAiSseToAnthropic(result.stream, res, { model: result.model });
+                            try { res.end(); } catch (e) { /* ignore */ }
+                            return;
+                        }
+                        const payload = chatToAnthropicMessage(result.data, result.model);
+                        if (wantStream) return writeSse(sseFramesForAnthropic(payload), metaOf(result));
+                        return send(res, 200, payload, metaOf(result));
+                    }
+                    if (pathname === '/v1/responses') {
+                        const wantStream = body.stream === true;
+                        const result = await this.chatCompletion({
+                            ...responsesToChat(body),
+                            stream: wantStream,
+                        });
+                        if (wantStream && result.stream) {
+                            if (!res.headersSent) {
+                                res.writeHead(200, {
+                                    'Content-Type': 'text/event-stream',
+                                    'Cache-Control': 'no-cache',
+                                    Connection: 'keep-alive',
+                                    ...metaOf(result),
+                                });
+                            }
+                            await pipeOpenAiSseToResponses(result.stream, res, { model: result.model });
+                            try { res.end(); } catch (e) { /* ignore */ }
+                            return;
+                        }
+                        const payload = chatToResponses(result.data, result.model);
+                        if (wantStream) return writeSse(sseFramesForResponses(payload), metaOf(result));
+                        return send(res, 200, payload, metaOf(result));
+                    }
+
                     const result = await this.chatCompletion(body);
-                    const meta = { 'x-omnirouter-provider': result.providerId, 'x-omnirouter-model': result.model };
+                    const meta = metaOf(result);
                     if (result.stream) {
                         try {
                             res.writeHead(200, {
@@ -773,3 +1518,10 @@ module.exports = ProviderRouter;
 module.exports.ProviderRouter = ProviderRouter;
 module.exports.STRATEGIES = STRATEGIES;
 module.exports.PRICE_TABLE = PRICE_TABLE;
+module.exports.anthropicMessagesToChat = anthropicMessagesToChat;
+module.exports.chatToAnthropicMessage = chatToAnthropicMessage;
+module.exports.responsesToChat = responsesToChat;
+module.exports.chatToResponses = chatToResponses;
+module.exports.pipeOpenAiSse = pipeOpenAiSse;
+module.exports.pipeOpenAiSseToAnthropic = pipeOpenAiSseToAnthropic;
+module.exports.pipeOpenAiSseToResponses = pipeOpenAiSseToResponses;

@@ -256,7 +256,7 @@ async function main() {
         database,
         baseDir: config.baseDir,
         selfId: process.env.INSTANCE_ID || null,
-        sharedSecret: process.env.INSTANCE_SHARED_SECRET || null,
+        sharedSecret: process.env.INSTANCE_SHARED_SECRET || process.env.INSTANCE_SYNC_SECRET || null,
     });
 
     // 4k. Quota tracking. This app runs on subscriptions with session and
@@ -381,6 +381,11 @@ async function main() {
             delegation,
             skills,
             agents,
+            scheduler,
+            devices: missionControl.deviceAutomation,
+            syncthing,
+            meetingBot,
+            goalEngine: goals,
         });
     }
 

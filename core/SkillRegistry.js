@@ -264,6 +264,27 @@ class SkillRegistry {
         return this._read(file);
     }
 
+    /**
+     * Hand a skill to an agent. Skills are markdown playbooks, not programs —
+     * "use" returns the procedure to follow, it does not execute it.
+     */
+    use(name, { args, chatId, agentId } = {}) {
+        const skill = this.get(name);
+        if (!skill) {
+            throw new Error(`Unknown skill '${name}'. Call list_skills to see valid names.`);
+        }
+        return {
+            skill: skill.name,
+            description: skill.description,
+            tags: skill.tags,
+            body: skill.body,
+            args: (args && typeof args === 'object') ? args : {},
+            chatId: chatId || null,
+            agentId: agentId || null,
+            note: 'This is a procedure to follow, not a program that was executed.',
+        };
+    }
+
     /** Load one draft by name (from skills/drafts). */
     getDraft(name) {
         const file = this._safePath(this.draftsDir, name);

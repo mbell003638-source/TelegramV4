@@ -25,29 +25,28 @@
 //      and other supported platforms as a visible participant.
 //    * Real-time and post-call transcription, pulled or pushed by webhook.
 //    * Recording, participant events, leaving the call on command.
+//    * Playing mp3 into the call: Create Bot MUST include automatic_audio_output
+//      or POST /bot/{id}/output_audio is refused. speak() then posts mp3.
 //
 //  What this module DOES NOT do — and does not pretend to do:
-//    * It does NOT make the agent SPEAK in the call. Nothing here sends audio
-//      into the meeting. Recall does offer separate output-media features on
-//      some plans, but this module deliberately does not drive them, so do not
-//      claim the agent talks. It listens and transcribes. That is all.
 //    * It does NOT work on MiroTalk P2P or an arbitrary custom WebRTC room —
 //      Recall supports a fixed list of platforms. A MiroTalk fallback room
 //      remains human-only.
 //    * It does NOT work at all without a paid RECALL_API_KEY. With no key,
-//      join() returns an explicit not-configured result naming what is
-//      missing. It never returns a fake success and never silently no-ops.
+//      join() / speak() return an explicit not-configured result naming what
+//      is missing. It never returns a fake success and never silently no-ops.
 //    * It NEVER fabricates a transcript. No data yet means an empty array and
 //      a status, not placeholder text.
+//    * TTS is Google Translate TTS via google-tts-api (already a repo dep),
+//      not a paid voice vendor. `tts` is injectable so tests never hit Google.
 //
 //  Env vars:
-//    RECALL_API_KEY          Recall.ai API key (required to join anything)
+//    RECALL_API_KEY          Recall.ai API key (required to join or speak)
 //    RECALL_API_BASE         optional region base, default us-west-2 v1
 //    RECALL_WEBHOOK_SECRET   optional HMAC secret for inbound webhooks
 //    RECALL_BOT_NAME         optional default display name in the call
 //
-//  No new npm dependency: node:https + node:crypto only. `transport` is
-//  injectable so tests never touch the network.
+//  `transport` and `tts` are injectable so tests never touch the network.
 // =============================================================================
 const https = require('https');
 const http = require('http');
@@ -59,6 +58,11 @@ const REQUEST_TIMEOUT_MS = 20000;
 const MAX_SEEN_EVENTS = 1000;
 const MAX_BUFFERED_LINES = 500;
 const PROVIDER = 'recall';
+
+// Tiny MPEG-1 Layer 3 silent frame (104 bytes). Hardcoded so join() never
+// downloads audio. Recall requires automatic_audio_output on Create Bot
+// before POST /bot/{id}/output_audio is accepted.
+const SILENT_MP3_B64 = '//tAxAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=';
 
 // Platforms Recall.ai can actually walk a bot into. Anything else (notably the
 // MiroTalk P2P fallback) is rejected up front rather than billed and failed.
@@ -187,6 +191,23 @@ function transcriptToText(lines) {
         .join('\n');
 }
 
+/**
+ * Default TTS: Google Translate via google-tts-api. Chunks long text.
+ * Injected `tts` should return [{ b64, kind:'mp3' }] and never hit the network.
+ */
+async function defaultGoogleTts(text, lang) {
+    const { getAllAudioBase64 } = require('google-tts-api');
+    const chunks = await getAllAudioBase64(String(text), {
+        lang: lang || 'en',
+        slow: false,
+        host: 'https://translate.google.com',
+    });
+    return (Array.isArray(chunks) ? chunks : []).map((c) => ({
+        b64: typeof c === 'string' ? c : String(c.base64 || c.b64 || ''),
+        kind: 'mp3',
+    }));
+}
+
 // -----------------------------------------------------------------------------
 //  MeetingBot
 // -----------------------------------------------------------------------------
@@ -197,6 +218,7 @@ class MeetingBot {
      * @param {object}   [options.database]      core/Database instance
      * @param {object}   [options.memorySearch]  core/MemorySearch instance
      * @param {Function} [options.transport]     async ({method,url,body,headers}) => parsed — injected in tests
+     * @param {Function} [options.tts]           async (text, lang) => [{ b64, kind:'mp3' }] — injected in tests
      * @param {string}   [options.baseUrl]       RECALL_API_BASE
      * @param {string}   [options.webhookSecret] RECALL_WEBHOOK_SECRET
      * @param {string}   [options.botName]       RECALL_BOT_NAME
@@ -208,6 +230,7 @@ class MeetingBot {
             database,
             memorySearch,
             transport,
+            tts,
             baseUrl,
             webhookSecret,
             botName,
@@ -220,6 +243,8 @@ class MeetingBot {
         this.memorySearch = memorySearch || null;
         // Injectable for tests; defaults to a builtin https request.
         this.transport = typeof transport === 'function' ? transport : null;
+        // Injectable for tests; default is google-tts-api getAllAudioBase64.
+        this.tts = typeof tts === 'function' ? tts : defaultGoogleTts;
         this.baseUrl = String(baseUrl || DEFAULT_API_BASE).replace(/\/+$/, '');
         this.webhookSecret = webhookSecret ? String(webhookSecret) : '';
         this.botName = String(botName || DEFAULT_BOT_NAME);
@@ -325,6 +350,15 @@ class MeetingBot {
         const body = {
             meeting_url: check.url,
             bot_name: name,
+            // Required: without this, Recall refuses POST /bot/{id}/output_audio.
+            automatic_audio_output: {
+                in_call_recording: {
+                    data: {
+                        kind: 'mp3',
+                        b64_data: SILENT_MP3_B64,
+                    },
+                },
+            },
         };
         if (transcription) {
             // meeting_captions needs no extra STT vendor account.
@@ -388,8 +422,10 @@ class MeetingBot {
             botName: name,
             status: record.status,
             supportedPlatform: supported,
-            // Be precise about what "joined" buys you.
-            capabilities: { joinsCall: true, transcribes: !!transcription, speaks: false },
+            // Be precise about what "joined" buys you. speaks is true here
+            // because Create Bot included automatic_audio_output (and a key
+            // is present — this branch is never reached unconfigured).
+            capabilities: { joinsCall: true, transcribes: !!transcription, speaks: true },
             raw: created,
         };
     }
@@ -449,6 +485,80 @@ class MeetingBot {
         } catch (err) {
             console.warn(`[MeetingBot] status(${id}) failed: ${err.message}`);
             return { ok: false, botId: id, error: err.message, code: 'provider_error' };
+        }
+    }
+
+    /**
+     * Synthesize `text` to mp3 and play it in the call via Recall
+     * POST /bot/{id}/output_audio. Never throws.
+     *
+     * @param {string} botId
+     * @param {string} text
+     * @param {object} [opts]
+     * @param {string} [opts.lang]  TTS language code (default 'en')
+     * @returns {Promise<object>}
+     */
+    async speak(botId, text, { lang } = {}) {
+        const spokenText = typeof text === 'string' ? text.trim() : String(text ?? '').trim();
+        if (!spokenText) {
+            return { ok: false, spoken: false, code: 'empty_text', error: 'text is required' };
+        }
+
+        const missing = this.missingConfig();
+        if (missing.length) {
+            const error = `Cannot speak: ${missing.join(', ')} is not configured.`;
+            console.warn(`[MeetingBot] ${error}`);
+            return {
+                ok: false,
+                spoken: false,
+                configured: false,
+                missing,
+                error,
+                code: 'not_configured',
+            };
+        }
+
+        const id = String(botId || '').trim();
+        if (!id) {
+            return { ok: false, spoken: false, error: 'botId is required', code: 'invalid_bot_id' };
+        }
+
+        let chunks;
+        try {
+            chunks = await this.tts(spokenText, lang || 'en');
+        } catch (err) {
+            console.warn(`[MeetingBot] TTS failed: ${err.message}`);
+            return { ok: false, spoken: false, botId: id, code: 'tts_error', error: err.message };
+        }
+
+        const audio = [];
+        if (Array.isArray(chunks)) {
+            for (const chunk of chunks) {
+                if (!chunk) continue;
+                const b64 = typeof chunk === 'string'
+                    ? chunk
+                    : String(chunk.b64 || chunk.base64 || chunk.b64_data || '');
+                if (!b64) continue;
+                audio.push({ kind: chunk.kind || 'mp3', b64_data: b64 });
+            }
+        }
+        if (!audio.length) {
+            const error = 'TTS produced no audio.';
+            console.warn(`[MeetingBot] ${error}`);
+            return { ok: false, spoken: false, botId: id, code: 'tts_error', error };
+        }
+
+        try {
+            for (const payload of audio) {
+                await this._request('POST', `/bot/${encodeURIComponent(id)}/output_audio`, {
+                    kind: payload.kind,
+                    b64_data: payload.b64_data,
+                });
+            }
+            return { ok: true, spoken: true, botId: id, chars: spokenText.length };
+        } catch (err) {
+            console.warn(`[MeetingBot] speak(${id}) failed: ${err.message}`);
+            return { ok: false, spoken: false, botId: id, error: err.message, code: 'provider_error' };
         }
     }
 
@@ -738,7 +848,7 @@ class MeetingBot {
                 createRoom: 'handled elsewhere (MissionControl /api/meetings/dispatch)',
                 joinCall: this.isConfigured,
                 transcribe: this.isConfigured,
-                speakInCall: false,
+                speakInCall: this.isConfigured,
             },
         };
     }
@@ -897,3 +1007,4 @@ module.exports.timingSafeStringEqual = timingSafeStringEqual;
 module.exports.DEFAULT_API_BASE = DEFAULT_API_BASE;
 module.exports.DEFAULT_BOT_NAME = DEFAULT_BOT_NAME;
 module.exports.MAX_SEEN_EVENTS = MAX_SEEN_EVENTS;
+module.exports.SILENT_MP3_B64 = SILENT_MP3_B64;

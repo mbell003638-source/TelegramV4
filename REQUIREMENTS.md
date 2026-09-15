@@ -34,7 +34,7 @@ Bugs found and fixed that were not visible from the UI:
 | # | Request | Status | Evidence |
 |---|---------|--------|----------|
 | 2.1 | One key in front of many providers | **Done** | `core/ProviderRouter.js`; 9 providers seeded |
-| 2.2 | Best of OpenRouter / OmniRoute / 9router | **Done** | Catalog + cost accounting (OpenRouter), failover + circuit breaker (OmniRoute), key-pool rotation with 4 strategies (9router) |
+| 2.2 | Best of opencodex / OmniRoute / 9router | **Done** | opencodex: CLI/env gateway, Anthropic Bearer vs X-Api-Key, model discovery. OmniRoute: failover + circuit breaker. 9router: key-pool rotation with 4 strategies. OpenRouter is an optional upstream provider (`OPENROUTER_API_KEY`), not the architecture source |
 | 2.3 | It is opencodex, not OpenRouter | **Done** | Studied `lidge-jun/opencodex`. Its research notes corrected two real bugs — see 2.4 |
 | 2.4 | Reconfigure an agent to use the router's key | **Done** | `core/AgentOverrides.js`. opencodex's notes showed `ANTHROPIC_API_KEY` maps to `X-Api-Key` while the router needs `Authorization: Bearer`, so the key must go in `ANTHROPIC_AUTH_TOKEN` — and setting both is an auth conflict. Also sets `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1` so Claude Code lists every routed model in its own `/model` picker |
 | 2.5 | Toggle off restores the default | **Done** | Snapshot-based. Verified: `ANTHROPIC_BASE_URL` was restored to its real prior value, and vars that were unset return to **unset**, not empty string |
@@ -47,12 +47,12 @@ Bugs found and fixed that were not visible from the UI:
 
 | # | Request | Status | Evidence |
 |---|---------|--------|----------|
-| 3.1 | All agents in one place | **Already there** | 8 registered: antigravity, opencode, codex, claude, openclaw, hermes, pi, grok |
+| 3.1 | All agents in one place | **Already there** | 8 CLI adapters: antigravity, opencode, codex, claude, openclaw, hermes, pi, grok. Hermes is the agent; there is no separate Harness |
 | 3.2 | Use existing subscriptions, no third-party API required | **Already there** | Agents are local CLI subprocesses. The router is optional and additive |
-| 3.3 | DeepSeek / Kimi / Groq / Gemini etc. available | **Done** | Seeded in the registry; reachable through the router |
+| 3.3 | DeepSeek / Kimi / Groq / Gemini etc. available | **Done** | Router providers in `core/ProviderRegistry.js`, not extra CLI adapters. Reachable through the one-key gateway |
 | 3.4 | One permanent memory shared by all agents | **Already there** + **Done** | Shared store existed; I added `core/MemorySearch.js` so any agent can *search* what any other learned. FTS5 confirmed available (SQLite 3.51.3) with a LIKE fallback |
 | 3.5 | Obsidian memory + 3D graph | **Already there** | `webui/app/globe/page.tsx`, `webui/app/vault/page.tsx`, `webui/lib/obsidian.ts` |
-| 3.6 | Web UI mission control | **Already there** | Two front ends over one backend — see Known gaps |
+| 3.6 | Web UI mission control | **Done** | WebUI (`webui/`, :3000) is canonical. `GET /` on the bridge 302s to `WEBUI_ORIGIN` (token query preserved). Vanilla HUD is `/legacy`; `DASHBOARD_UI=legacy` keeps it at `/` |
 | 3.7 | AMOLED black + blue accent | **Already there** | `#000000` ground, `#2563eb` / `#38bdf8` accents |
 | 3.8 | Counsel with all the models | **Already there** + **Done** | War Room council existed; added `core/TaskPlanner.js` (JARVIS/HuggingGPT's plan → select model → execute → synthesize) |
 | 3.9 | Self-learning | **Already there** + **Done** | Engine existed but only ran on a manual `/learn`. Now `POST /api/improve` runs it, and it can be armed on a cron |
@@ -83,12 +83,12 @@ says so.
 | # | Request | Status | Evidence |
 |---|---------|--------|----------|
 | 5.1 | Access everything on the computer | **Already there** | `ActionExecutor` shell execution, `ShellJobManager`, gated by `KillSwitches`, `SecurityApprovalGate`, `ExfiltrationGuard` |
-| 5.2 | Windows / macOS / Linux | **Partial** | Path resolution and adb discovery cover all three; the agent adapters and launcher scripts are Windows-first (`.cmd`, `.vbs`, `.ps1`). Not verified on macOS or Linux |
+| 5.2 | Windows / macOS / Linux | **Partial** | Path resolution and adb discovery cover all three. Dual launchers exist: `start.sh` / `start.command` (macOS/Linux) and `start.ps1` (Windows). Syntax-checked with `bash -n`; not booted on real macOS |
 | 5.3 | Android devices | **Already there** | `core/DeviceAutomation.js` — screenshot, tap, swipe, text, keys, launch |
 | 5.4 | **Android TV / Google TV** | **Done** | These are network devices, so they were previously unreachable at any price. Added `connect` / `disconnect` / `pairWireless` / `enableTcpip`, plus 30 named remote keys (a TV has no touchscreen, so `tap` is useless on one) and TV package names. `adb` is not installed on this machine, so the live dial is unverified here |
 | 5.5 | Control other devices from a master | **Already there** | `core/SatelliteHub.js` — register / poll / dispatch / response with auth |
 | 5.6 | Run on a VPS | **Done** | Was impossible: the bridge origin was hardcoded to `localhost:3141` in 13 files. Now `NEXT_PUBLIC_BRIDGE_URL`. `scripts/deploy-vps.sh` and a systemd unit exist |
-| 5.7 | Syncthing to sync two setups | **Not done** | Not started |
+| 5.7 | Syncthing to sync two setups | **Done** | `core/SyncthingBridge.js`; `test/syncthing.test.js`. `shareFolder()` is guarded against data loss: Syncthing PATCH replaces the device list, so the tests assert the body resends every pre-existing device plus the new one (sending only the new device would unshare everyone else) |
 
 ---
 
@@ -98,26 +98,22 @@ says so.
 |---|---------|--------|----------|
 | 6.1 | Meetings work | **Done** | Room creation via Daily.co, Google Meet, or a MiroTalk P2P fallback. Sessions now **persist** — they were in-memory and vanished on restart |
 | 6.2 | Notes to Obsidian | **Already there** | `/api/meetings/save-notes` |
-| 6.3 | **An agent actually joins the meeting** | **Partial** | The system creates the room, records the session, and syncs notes. No agent joins as a real audio/video participant — that needs a media bot (a Recall.ai key slot exists but nothing drives it). The current HUD is a local voice experience, not a participant in the call |
+| 6.3 | **An agent actually joins the meeting** | **Done** | `core/MeetingBot.js` drives Recall.ai: joins as a visible participant, transcribes, and `speak()` plays TTS audio into the call (`POST /bot/{id}/output_audio`, Google Translate TTS). Needs `RECALL_API_KEY`. MiroTalk P2P stays human-only. See [docs/MEETINGS.md](docs/MEETINGS.md); tests in `test/meeting-bot.test.js` |
 
 ---
 
-## 7. Parked by your instruction
+## 7. Android interface
 
-| # | Request | Status |
-|---|---------|--------|
-| 7.1 | Android app as the interface, like OpenClaw's | **Parked** — you said "that is later once this project is completely finished" |
+| # | Request | Status | Evidence |
+|---|---------|--------|----------|
+| 7.1 | Android app as the interface, like OpenClaw's | **Done** | Thin gateway client. Five screens in `android/app/src/main/java/com/agentos/client/MainActivity.kt`: Connect, Agents, Chat, Remote, Memory. HTTP is `android/app/src/main/java/com/agentos/client/net/GatewayClient.kt` against the existing backend. [android/README.md](android/README.md), [android/signing/RELEASE.md](android/signing/RELEASE.md) |
 
 ---
 
 ## Known gaps, stated plainly
 
-1. **Syncthing** (5.7) — not started.
-2. **Agent joining a meeting as a participant** (6.3) — needs a media bot.
-3. **WebUI bypasses the backend.** `webui/app/api/chat/route.ts` re-implements agent spawning with its own paths and timeouts, bypassing `AgentPool`, `SessionStore`, `LoopGuard`, `KillSwitches`, `ExfiltrationGuard`, the audit log, and shared memory. Two code paths can run the same agent under different safety rules. Left deliberately — collapsing it is a behavioural change that deserves its own reviewed commit.
-4. **Two front ends.** `core/dashboardHtml.js` (4,634 lines of vanilla HTML) and the Next.js `webui/` are separate UIs over the same backend.
-5. **macOS / Linux unverified** (5.2).
-6. **`MemorySearch` has no test file.** The agent writing it was killed by a rate limit. Verified manually (FTS5 mode, ranking, special-character queries) but not covered by an automated test.
+1. **MiroTalk P2P rooms stay human-only** (6.3) — Recall.ai does not support arbitrary WebRTC. Zoom / Meet / Teams / Webex / Daily.co can have a speaking bot.
+2. **macOS / Linux not booted on real hardware here** (5.2) — Unix launchers exist (`start.sh`, `start.command`, `satellite/start_satellite.sh`) and `bash -n` passes. This environment is Windows.
 
 ## On "merge all the repos"
 
@@ -130,7 +126,7 @@ porting their **capabilities**, reimplemented natively in this stack.
 
 ---
 
-*Baseline on arrival: 50 tests. Now: 125, all passing.*
+*Baseline on arrival: 50 tests. Now: 644, all passing (`node --test test/*.test.js`).*
 
 ---
 

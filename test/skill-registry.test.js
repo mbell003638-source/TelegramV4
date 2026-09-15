@@ -89,6 +89,24 @@ const HOSTILE_NAMES = [
 //  Round-trips and frontmatter
 // ===========================================================================
 
+test('use returns the skill procedure rather than executing it', () => {
+    const { registry, cleanup } = makeRegistry();
+    try {
+        registry.save({
+            name: 'deploy-vps',
+            description: 'Ship the bridge',
+            body: '1. run deploy.ps1\n2. check health',
+            tags: ['deploy'],
+        });
+        const used = registry.use('deploy-vps', { args: { target: 'staging' }, chatId: 'c1', agentId: 'hermes' });
+        assert.equal(used.skill, 'deploy-vps');
+        assert.match(used.body, /deploy\.ps1/);
+        assert.deepEqual(used.args, { target: 'staging' });
+        assert.match(used.note, /procedure to follow/);
+        assert.throws(() => registry.use('no-such-skill'), /Unknown skill/);
+    } finally { cleanup(); }
+});
+
 test('save then get round-trips every frontmatter field', () => {
     const { registry, skillsDir, cleanup } = makeRegistry();
     try {

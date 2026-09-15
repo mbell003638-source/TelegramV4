@@ -44,6 +44,7 @@ async function openProviderSettingsModal() {
     if (p.ollama && p.ollama.baseUrl) document.getElementById('url-ollama').value = p.ollama.baseUrl;
     if (p.openai && p.openai.baseUrl) document.getElementById('url-openai').value = p.openai.baseUrl;
   } catch(e) { console.error('Failed to load provider settings:', e); }
+  if (typeof loadAgentOverrides === 'function') loadAgentOverrides();
 }
 
 function closeProviderSettingsModal() {
@@ -176,6 +177,20 @@ async function saveProviderSettings() {
   .boardroom-core-title { font-size: 10px; font-weight: 700; color: #60a5fa; letter-spacing: 1px; text-transform: uppercase; margin-bottom: 2px; display: flex; align-items: center; gap: 6px; }
   .warroom-mode-pill { background: #1e293b; color: #94a3b8; border: 1px solid #334155; border-radius: 20px; padding: 3px 10px; font-size: 11px; font-weight: 600; cursor: pointer; transition: all 0.2s; }
   .warroom-mode-pill.active { background: #2563eb; color: #fff; border-color: #3b82f6; box-shadow: 0 0 10px rgba(37,99,235,0.4); }
+  .router-row { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-bottom: 1px solid #12182a; }
+  .router-row:last-child { border-bottom: none; }
+  .router-toggle { width: 36px; height: 20px; border-radius: 999px; background: #1e293b; border: 1px solid #334155; position: relative; cursor: pointer; flex-shrink: 0; padding: 0; }
+  .router-toggle.on { background: #1d4ed8; border-color: #3b82f6; box-shadow: 0 0 10px rgba(37,99,235,0.35); }
+  .router-toggle .knob { position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: #94a3b8; transition: left 0.15s; }
+  .router-toggle.on .knob { left: 18px; background: #fff; }
+  .router-toggle:disabled { opacity: 0.4; cursor: not-allowed; }
+  .always-listen-btn { background: #0b1220; color: #64748b; border: 1px solid #1e293b; border-radius: 8px; padding: 6px 10px; font-size: 11px; font-weight: 600; cursor: pointer; display: flex; align-items: center; gap: 6px; white-space: nowrap; }
+  .always-listen-btn.on { background: #04122a; color: #bfdbfe; border-color: #3b82f6; box-shadow: 0 0 14px rgba(56,189,248,0.35); }
+  .always-listen-dot { width: 8px; height: 8px; border-radius: 50%; background: #475569; display: inline-block; }
+  .always-listen-btn.on .always-listen-dot { background: #38bdf8; box-shadow: 0 0 8px #38bdf8; }
+  .always-listen-btn.awake .always-listen-dot { background: #f87171; box-shadow: 0 0 8px #f87171; animation: pulse 1s ease-in-out infinite; }
+  .always-listen-word { width: 88px; background: #05070f; border: 1px solid #1e3a5f; border-radius: 6px; padding: 5px 8px; color: #93c5fd; font-size: 11px; font-weight: 600; outline: none; }
+  .always-listen-privacy { font-size: 10px; color: #475569; margin-top: 6px; }
   .role-badge { display: inline-block; font-size: 8px; padding: 1px 4px; border-radius: 3px; text-transform: uppercase; font-weight: 700; letter-spacing: 0.3px; margin-top: 2px; }
   .role-lead { background: #78350f; color: #fef3c7; border: 1px solid #d97706; }
   .role-tech { background: #064e3b; color: #a7f3d0; border: 1px solid #059669; }
@@ -377,6 +392,23 @@ async function saveProviderSettings() {
   <div id="agents-container" class="flex flex-wrap gap-3"></div>
 </div>
 
+<!-- OmniRouter per-agent overrides -->
+<div id="omnirouter-section" class="mb-5">
+  <div class="card" style="margin-bottom:12px;border:1px solid rgba(59,130,246,0.28);background:#040817">
+    <div class="flex items-center justify-between mb-2">
+      <div>
+        <div class="flex items-center gap-2">
+          <span style="font-size:16px">🔀</span>
+          <h3 class="text-base font-bold text-white">OmniRouter</h3>
+        </div>
+        <p class="text-xs text-gray-400 mt-0.5">One switch per agent. On routes that CLI through the local OmniRouter; off restores its own keys. No master switch.</p>
+      </div>
+    </div>
+    <div id="omnirouter-list"><div class="text-xs text-gray-600 py-2">Loading overrides...</div></div>
+    <div id="omnirouter-status" class="text-xs text-gray-500 mt-2"></div>
+  </div>
+</div>
+
 <!-- War Room Section -->
 <div id="warroom-section" class="mb-5">
   <div class="card" style="margin-bottom:12px;border:1px solid #1e293b;background:linear-gradient(180deg,#111827 0%,#0f172a 100%)">
@@ -397,6 +429,17 @@ async function saveProviderSettings() {
         </button>
       </div>
     </div>
+    <div class="flex items-center gap-2 mt-3 flex-wrap">
+      <button type="button" class="always-listen-btn" onclick="toggleAlwaysListen()">
+        <span class="always-listen-dot"></span><span class="always-listen-label">Always Listening: OFF</span>
+      </button>
+      <label class="flex items-center gap-1.5 text-xs text-gray-500" style="white-space:nowrap">
+        Wake word
+        <input class="always-listen-word" value="jarvis" spellcheck="false" oninput="setAlwaysListenWord(this.value)">
+      </label>
+      <span class="always-listen-hint text-xs text-gray-600"></span>
+    </div>
+    <p class="always-listen-privacy" style="display:none">Ambient audio stays local until the wake word is heard.</p>
   </div>
 
   <!-- War Room Voices -->
@@ -975,6 +1018,16 @@ async function saveProviderSettings() {
         Voice Output: ON
       </button>
     </div>
+    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px;justify-content:center">
+      <button type="button" class="always-listen-btn" onclick="toggleAlwaysListen()">
+        <span class="always-listen-dot"></span><span class="always-listen-label">Always Listening: OFF</span>
+      </button>
+      <label class="flex items-center gap-1.5 text-xs text-gray-500" style="white-space:nowrap">
+        Wake word
+        <input class="always-listen-word" value="jarvis" spellcheck="false" oninput="setAlwaysListenWord(this.value)">
+      </label>
+    </div>
+    <p class="always-listen-privacy" style="display:none;text-align:center;margin-bottom:8px">Ambient audio stays local until the wake word is heard.</p>
     <!-- Quick Command Suggestions -->
     <div style="width:100%">
       <div style="font-size:10px;color:#475569;font-family:monospace;margin-bottom:6px;text-transform:uppercase;letter-spacing:1px">Suggested Voice Commands</div>
@@ -1484,6 +1537,123 @@ async function loadAgents() {
       }
     });
   } catch {}
+}
+
+const ROUTER_AGENT_ORDER = ['claude', 'codex', 'opencode', 'grok', 'hermes', 'pi', 'openclaw', 'antigravity'];
+const ROUTER_AGENT_LABELS = {
+  claude: '🎭 Claude Code',
+  codex: '🧠 Codex',
+  grok: '🛸 Grok',
+  hermes: '🪽 Hermes',
+  opencode: '🔓 OpenCode',
+  openclaw: '🦞 OpenClaw',
+  pi: '🥧 Pi Agent',
+  antigravity: '🛰️ Antigravity'
+};
+
+function routerAgentLabel(key) {
+  var a = (typeof missionAgentsList !== 'undefined' && missionAgentsList)
+    ? missionAgentsList.find(function(x) { return x.id === key; })
+    : null;
+  if (a) return (a.emoji ? a.emoji + ' ' : '') + a.name;
+  return ROUTER_AGENT_LABELS[key] || key;
+}
+
+function normalizeOverrideList(overrides) {
+  if (!overrides) return [];
+  if (Array.isArray(overrides)) return overrides.slice();
+  var ordered = [];
+  ROUTER_AGENT_ORDER.forEach(function(k) {
+    if (overrides[k]) ordered.push(overrides[k]);
+  });
+  Object.keys(overrides).forEach(function(k) {
+    if (ROUTER_AGENT_ORDER.indexOf(k) === -1 && overrides[k]) ordered.push(overrides[k]);
+  });
+  return ordered;
+}
+
+function renderAgentOverrides(overrides, error) {
+  var lists = [document.getElementById('omnirouter-list'), document.getElementById('omnirouter-list-modal')];
+  var status = document.getElementById('omnirouter-status');
+  if (error) {
+    var errHtml = '<div class="text-xs text-red-400 py-2">' + escapeHtml(String(error)) + '</div>';
+    lists.forEach(function(el) { if (el) el.innerHTML = errHtml; });
+    if (status) status.textContent = '';
+    return;
+  }
+  var rows = normalizeOverrideList(overrides);
+  if (!rows.length) {
+    var empty = '<div class="text-xs text-gray-600 py-2">No agent overrides available.</div>';
+    lists.forEach(function(el) { if (el) el.innerHTML = empty; });
+    if (status) status.textContent = '';
+    return;
+  }
+  var html = rows.map(function(ov) {
+    var key = ov.agentKey || ov.agentId || '';
+    var on = !!ov.enabled;
+    var supported = ov.supported !== false;
+    var masked = ov.apiKey ? escapeHtml(String(ov.apiKey)) : '';
+    var provider = ov.providerId ? escapeHtml(String(ov.providerId)) : '';
+    var meta = [];
+    if (on && masked) meta.push(masked);
+    if (on && provider) meta.push(provider);
+    var metaHtml = meta.length
+      ? '<span style="font-size:10px;color:#64748b;font-family:monospace">' + meta.join(' · ') + '</span>'
+      : '<span style="font-size:10px;color:#334155">own keys</span>';
+    return '<div class="router-row">' +
+      '<div style="flex:1;min-width:0">' +
+        '<div class="text-xs font-semibold text-gray-200">' + escapeHtml(routerAgentLabel(key)) + '</div>' +
+        metaHtml +
+      '</div>' +
+      '<button type="button" class="router-toggle' + (on ? ' on' : '') + '" data-agent="' + escapeHtml(key) + '"' +
+        (supported ? ' onclick="toggleAgentOverride(this.dataset.agent, ' + (on ? 'false' : 'true') + ')"' : ' disabled') +
+        ' title="' + (on ? 'Disable OmniRouter for ' : 'Enable OmniRouter for ') + escapeHtml(key) + '">' +
+        '<span class="knob"></span>' +
+      '</button>' +
+    '</div>';
+  }).join('');
+  lists.forEach(function(el) { if (el) el.innerHTML = html; });
+  if (status) {
+    var n = rows.filter(function(ov) { return ov.enabled; }).length;
+    status.textContent = n ? (n + ' agent' + (n === 1 ? '' : 's') + ' routed through OmniRouter') : 'All agents using their own keys';
+  }
+}
+
+async function loadAgentOverrides() {
+  try {
+    const data = await api('/api/agents/override');
+    if (data && data.error) {
+      renderAgentOverrides(null, data.error);
+      return;
+    }
+    renderAgentOverrides(data && data.overrides);
+  } catch(e) {
+    renderAgentOverrides(null, e.message || 'Failed to load overrides');
+  }
+}
+
+async function toggleAgentOverride(agentKey, enabled) {
+  if (!agentKey) return;
+  try {
+    const res = await fetch(BASE + '/api/agents/override?token=' + TOKEN, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ agentKey: agentKey, enabled: !!enabled })
+    });
+    const data = await res.json().catch(function() { return {}; });
+    if (!res.ok) {
+      var msg = data.error || ('HTTP ' + res.status);
+      var st = document.getElementById('omnirouter-status');
+      if (st) st.textContent = msg;
+      await loadAgentOverrides();
+      return;
+    }
+    renderAgentOverrides(data.overrides);
+  } catch(e) {
+    var st2 = document.getElementById('omnirouter-status');
+    if (st2) st2.textContent = 'Override failed: ' + e.message;
+    await loadAgentOverrides();
+  }
 }
 
 function toggleModelPicker(el) {
@@ -2498,6 +2668,12 @@ let warRoomVisualizerAnim = null;
 let warRoomIsSpeaking = false;
 let warRoomTargetAgent = 'codex';
 let warRoomMode = 'council';
+let warRoomAlwaysOn = false;
+let warRoomWakeWord = 'jarvis';
+let warRoomAwake = false;
+let warRoomRestartTimer = null;
+let warRoomRestartCount = 0;
+let warRoomStopping = false;
 
 function setWarRoomMode(mode) {
   warRoomMode = mode;
@@ -2757,6 +2933,7 @@ function openWarRoomModal(isTextMode = false) {
 
   renderWarRoomAgents();
   initWarRoomVisualizer();
+  if (typeof syncAlwaysListenUI === 'function') syncAlwaysListenUI();
 
   const transcript = document.getElementById('warroom-transcript');
   transcript.innerHTML = '';
@@ -2774,9 +2951,9 @@ function openWarRoomModal(isTextMode = false) {
 function endWarRoomStandup() {
   warRoomActive = false;
   warRoomIsSpeaking = false;
-  warRoomIsListening = false;
+  if (!warRoomAlwaysOn) warRoomIsListening = false;
   if ('speechSynthesis' in window) window.speechSynthesis.cancel();
-  if (warRoomRecognition) {
+  if (!warRoomAlwaysOn && warRoomRecognition) {
     try { warRoomRecognition.stop(); } catch(e) {}
   }
   if (warRoomTimerInterval) clearInterval(warRoomTimerInterval);
@@ -2960,56 +3137,252 @@ async function sendWarRoomSpeech(customText) {
   }
 }
 
+function getWakeWord() {
+  return (warRoomWakeWord || 'jarvis').toLowerCase().trim() || 'jarvis';
+}
+
+function paintWarRoomMicBtn(listening) {
+  var btn = document.getElementById('warroom-mic-btn');
+  var txt = document.getElementById('warroom-mic-text');
+  if (btn) {
+    if (listening) { btn.style.borderColor = '#ef4444'; btn.style.background = '#7f1d1d'; }
+    else { btn.style.borderColor = '#3b82f6'; btn.style.background = '#1e293b'; }
+  }
+  if (txt) {
+    if (warRoomAlwaysOn) txt.textContent = warRoomAwake ? 'Awake' : 'Armed';
+    else txt.textContent = listening ? 'Listening...' : 'Speak';
+  }
+}
+
+function syncAlwaysListenUI() {
+  var word = getWakeWord();
+  var on = warRoomAlwaysOn;
+  var awake = warRoomAwake;
+  var label = 'Always Listening: ' + (on ? (awake ? 'AWAKE' : 'ARMED') : 'OFF');
+  document.querySelectorAll('.always-listen-btn').forEach(function(btn) {
+    btn.classList.toggle('on', on);
+    btn.classList.toggle('awake', on && awake);
+    var lab = btn.querySelector('.always-listen-label');
+    if (lab) lab.textContent = label;
+  });
+  document.querySelectorAll('.always-listen-word').forEach(function(inp) {
+    if (document.activeElement !== inp) inp.value = warRoomWakeWord || 'jarvis';
+  });
+  document.querySelectorAll('.always-listen-privacy').forEach(function(el) {
+    el.style.display = on ? '' : 'none';
+  });
+  document.querySelectorAll('.always-listen-hint').forEach(function(el) {
+    if (!on) el.textContent = '';
+    else el.textContent = awake ? 'Listening for command…' : ('say "' + word + '"');
+  });
+  paintWarRoomMicBtn(warRoomIsListening);
+  var st = document.getElementById('warroom-speaker-status');
+  if (st && on && warRoomActive && !warRoomIsSpeaking && !warRoomIsListening) {
+    st.textContent = awake ? 'Listening for command…' : ('Waiting for "' + word + '"');
+  }
+  if (typeof jarvisModalOpen !== 'undefined' && jarvisModalOpen && on) {
+    setJarvisStatus(awake ? 'LISTENING...' : ('WAITING FOR "' + word.toUpperCase() + '"'));
+  }
+}
+
+function setAlwaysListenWord(val) {
+  warRoomWakeWord = String(val || 'jarvis').trim() || 'jarvis';
+  try { localStorage.setItem('warroom.wakeWord', warRoomWakeWord); } catch(e) {}
+  syncAlwaysListenUI();
+}
+
+function toggleAlwaysListen() {
+  setAlwaysListen(!warRoomAlwaysOn);
+}
+
+function killAlwaysListen(reason) {
+  warRoomAlwaysOn = false;
+  warRoomAwake = false;
+  warRoomStopping = true;
+  warRoomRestartCount = 99;
+  try { localStorage.setItem('warroom.alwaysOn', '0'); } catch(e) {}
+  if (warRoomRestartTimer) { clearTimeout(warRoomRestartTimer); warRoomRestartTimer = null; }
+  if (warRoomRecognition) {
+    try { warRoomRecognition.stop(); } catch(e) {}
+  }
+  warRoomIsListening = false;
+  syncAlwaysListenUI();
+  var st = document.getElementById('warroom-speaker-status');
+  if (st) st.textContent = reason || 'Always listening stopped';
+  if (typeof jarvisModalOpen !== 'undefined' && jarvisModalOpen) setJarvisStatus('MIC BLOCKED', reason);
+  setTimeout(function() { warRoomStopping = false; }, 400);
+}
+
+function setAlwaysListen(on) {
+  warRoomAlwaysOn = !!on;
+  try { localStorage.setItem('warroom.alwaysOn', warRoomAlwaysOn ? '1' : '0'); } catch(e) {}
+  if (warRoomAlwaysOn) {
+    warRoomStopping = false;
+    warRoomRestartCount = 0;
+    warRoomAwake = false;
+    if (jarvisListening && jarvisRecognition) {
+      try { jarvisRecognition.stop(); } catch(e) {}
+      jarvisListening = false;
+    }
+    var rec = ensureWarRoomRecognition();
+    if (!rec) {
+      warRoomAlwaysOn = false;
+      try { localStorage.setItem('warroom.alwaysOn', '0'); } catch(e) {}
+      syncAlwaysListenUI();
+      alert('Speech recognition is not supported in this browser. Please use Chrome or Edge.');
+      return;
+    }
+    try { rec.start(); } catch(e) {}
+  } else {
+    warRoomStopping = true;
+    warRoomAwake = false;
+    if (warRoomRestartTimer) { clearTimeout(warRoomRestartTimer); warRoomRestartTimer = null; }
+    if (warRoomRecognition) {
+      try { warRoomRecognition.stop(); } catch(e) {}
+    }
+    setTimeout(function() { warRoomStopping = false; }, 300);
+  }
+  syncAlwaysListenUI();
+}
+
+function dispatchWarRoomVoice(text) {
+  text = (text || '').trim();
+  if (!text) return;
+  if (typeof jarvisModalOpen !== 'undefined' && jarvisModalOpen) {
+    setJarvisStatus('THINKING...', '<strong>You:</strong> "' + escapeHtml(text) + '"');
+  }
+  if (!warRoomActive) openWarRoomModal(false);
+  sendWarRoomSpeech(text);
+}
+
+function handleWarRoomHeard(text) {
+  text = (text || '').trim();
+  if (!text) return;
+  if (!warRoomAlwaysOn || warRoomAwake) {
+    warRoomAwake = false;
+    syncAlwaysListenUI();
+    dispatchWarRoomVoice(text);
+    return;
+  }
+  var word = getWakeWord();
+  var lower = text.toLowerCase();
+  var at = lower.indexOf(word);
+  if (at === -1) {
+    var st = document.getElementById('warroom-speaker-status');
+    if (st) st.textContent = 'Waiting for "' + word + '"';
+    if (typeof jarvisModalOpen !== 'undefined' && jarvisModalOpen) {
+      setJarvisStatus('WAITING FOR "' + word.toUpperCase() + '"', '<span style="color:#64748b;font-style:italic">' + escapeHtml(text) + '</span>');
+    }
+    return;
+  }
+  var after = text.slice(at + word.length).replace(/^[\s,.:;!?-]+/, '');
+  if (after) {
+    dispatchWarRoomVoice(after);
+  } else {
+    warRoomAwake = true;
+    syncAlwaysListenUI();
+    var st2 = document.getElementById('warroom-speaker-status');
+    if (st2) st2.textContent = 'Listening for command…';
+  }
+}
+
+function ensureWarRoomRecognition() {
+  var SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SpeechRec) return null;
+  if (warRoomRecognition) return warRoomRecognition;
+  var rec = new SpeechRec();
+  rec.continuous = false;
+  rec.interimResults = true;
+  rec.lang = 'en-US';
+
+  rec.onstart = function() {
+    warRoomIsListening = true;
+    warRoomRestartCount = 0;
+    paintWarRoomMicBtn(true);
+    var st = document.getElementById('warroom-speaker-status');
+    if (st) {
+      if (warRoomAlwaysOn && !warRoomAwake) st.textContent = 'Waiting for "' + getWakeWord() + '"';
+      else st.textContent = 'Listening to your microphone...';
+    }
+  };
+
+  rec.onresult = function(event) {
+    var interim = '';
+    for (var i = event.resultIndex; i < event.results.length; i++) {
+      var spoken = event.results[i][0].transcript;
+      if (!event.results[i].isFinal) {
+        interim += spoken;
+        continue;
+      }
+      handleWarRoomHeard(spoken);
+    }
+    if (interim) {
+      var inp = document.getElementById('warroom-input');
+      if (inp && document.activeElement !== inp) inp.placeholder = interim;
+    }
+  };
+
+  rec.onerror = function(e) {
+    var err = e && e.error;
+    if (err === 'not-allowed' || err === 'service-not-allowed') {
+      killAlwaysListen('Mic blocked — always listening stopped');
+      alert('Microphone permission denied. Always listening is off.');
+      return;
+    }
+    if (err !== 'no-speech' && err !== 'aborted') {
+      console.warn('Speech recognition error:', err || e);
+    }
+  };
+
+  rec.onend = function() {
+    warRoomIsListening = false;
+    paintWarRoomMicBtn(false);
+    var st = document.getElementById('warroom-speaker-status');
+    if (!warRoomAlwaysOn || warRoomStopping) {
+      if (st && warRoomActive && !warRoomIsSpeaking) st.textContent = 'Standup active · Speak or type below';
+      return;
+    }
+    warRoomRestartCount += 1;
+    var delay = Math.min(250 * warRoomRestartCount, 5000);
+    if (warRoomRestartCount > 20) {
+      killAlwaysListen('Always listening stopped');
+      return;
+    }
+    if (warRoomRestartTimer) clearTimeout(warRoomRestartTimer);
+    warRoomRestartTimer = setTimeout(function() {
+      try { rec.start(); } catch(err) {}
+    }, delay);
+  };
+
+  warRoomRecognition = rec;
+  return rec;
+}
+
 function toggleWarRoomMic() {
-  const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
-  if (!SpeechRec) {
+  var rec = ensureWarRoomRecognition();
+  if (!rec) {
     alert('Speech recognition is not supported in this browser. You can type directly in the message box below!');
-    const inp = document.getElementById('warroom-input');
+    var inp = document.getElementById('warroom-input');
     if (inp) inp.focus();
     return;
   }
 
-  if (warRoomIsListening) {
-    if (warRoomRecognition) warRoomRecognition.stop();
+  if (warRoomAlwaysOn) {
+    if (window.speechSynthesis) window.speechSynthesis.cancel();
+    warRoomAwake = true;
+    syncAlwaysListenUI();
+    try { rec.start(); } catch(e) {}
     return;
   }
 
+  if (warRoomIsListening) {
+    try { rec.stop(); } catch(e) {}
+    return;
+  }
+
+  if (window.speechSynthesis) window.speechSynthesis.cancel();
   try {
-    warRoomRecognition = new SpeechRec();
-    warRoomRecognition.continuous = false;
-    warRoomRecognition.interimResults = false;
-    warRoomRecognition.lang = 'en-US';
-
-    warRoomRecognition.onstart = () => {
-      warRoomIsListening = true;
-      const btn = document.getElementById('warroom-mic-btn');
-      const txt = document.getElementById('warroom-mic-text');
-      const st = document.getElementById('warroom-speaker-status');
-      if (btn) { btn.style.borderColor = '#ef4444'; btn.style.background = '#7f1d1d'; }
-      if (txt) txt.textContent = 'Listening...';
-      if (st) st.textContent = 'Listening to your microphone...';
-    };
-
-    warRoomRecognition.onresult = (event) => {
-      const spoken = event.results[0][0].transcript;
-      if (spoken) sendWarRoomSpeech(spoken);
-    };
-
-    warRoomRecognition.onerror = (e) => {
-      console.warn('Speech recognition error:', e);
-    };
-
-    warRoomRecognition.onend = () => {
-      warRoomIsListening = false;
-      const btn = document.getElementById('warroom-mic-btn');
-      const txt = document.getElementById('warroom-mic-text');
-      const st = document.getElementById('warroom-speaker-status');
-      if (btn) { btn.style.borderColor = '#3b82f6'; btn.style.background = '#1e293b'; }
-      if (txt) txt.textContent = 'Speak';
-      if (st && warRoomActive && !warRoomIsSpeaking) st.textContent = 'Standup active &middot; Speak or type below';
-    };
-
-    warRoomRecognition.start();
+    rec.start();
   } catch(e) {
     alert('Microphone access could not be started: ' + e.message);
   }
@@ -3759,6 +4132,7 @@ function openJarvisModal() {
   modal.style.display = 'flex';
   jarvisModalOpen = true;
   initJarvisOrb();
+  if (typeof syncAlwaysListenUI === 'function') syncAlwaysListenUI();
   speakJarvisGreeting();
 }
 
@@ -3812,6 +4186,16 @@ function speakJarvisGreeting() {
 }
 
 function toggleJarvisMic() {
+  if (warRoomAlwaysOn) {
+    if (window.speechSynthesis) window.speechSynthesis.cancel();
+    warRoomAwake = true;
+    syncAlwaysListenUI();
+    setJarvisStatus('LISTENING...', '<span style="color:#38bdf8;font-style:italic">Wake skipped — listening for command...</span>');
+    var recOn = ensureWarRoomRecognition();
+    try { if (recOn) recOn.start(); } catch(e) {}
+    return;
+  }
+
   const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
   if (!SpeechRec) {
     alert('Speech Recognition is not supported in this browser. Please use Chrome or Edge.');
@@ -4007,7 +4391,8 @@ async function refreshAll() {
       loadWarRoomVoices(),
       loadMeetingSessions(),
       loadKillSwitches(),
-      loadSuggestions()
+      loadSuggestions(),
+      loadAgentOverrides()
     ]);
   } catch (err) {
     console.error('refreshAll error:', err);
@@ -4037,6 +4422,13 @@ function checkHashNav() {
   if (location.hash === '#jarvis') openJarvisModal();
 }
 checkHashNav();
+
+try {
+  var savedWake = localStorage.getItem('warroom.wakeWord');
+  if (savedWake) warRoomWakeWord = savedWake;
+  syncAlwaysListenUI();
+  if (localStorage.getItem('warroom.alwaysOn') === '1') setAlwaysListen(true);
+} catch(e) {}
 
 // \u2500\u2500 Chat \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 let chatOpen = false;
@@ -4510,12 +4902,22 @@ async function abortProcessing() {
   </div>
 
   <!-- Speech Controls & Prompt Input -->
-  <div class="p-3 bg-[#10121e] border-t border-gray-800 flex items-center gap-2">
-    <button id="warroom-mic-btn" onclick="toggleWarRoomMic()" style="background:#1e293b;color:#fff;border:1px solid #3b82f6;border-radius:8px;padding:8px 14px;font-size:12px;font-weight:600;display:flex;align-items:center;gap:6px;cursor:pointer;white-space:nowrap">
-      <span id="warroom-mic-icon">🎤</span> <span id="warroom-mic-text">Speak</span>
-    </button>
-    <input type="text" id="warroom-input" placeholder="Ask the Council a question (all agents deliberate & consolidate)..." style="flex:1;background:#08090f;border:1px solid #334155;border-radius:8px;padding:8px 12px;color:#fff;font-size:12px;outline:none" onkeydown="if(event.key==='Enter'){sendWarRoomSpeech()}">
-    <button id="warroom-send-btn" onclick="sendWarRoomSpeech()" style="background:#2563eb;color:#fff;border:none;border-radius:8px;padding:8px 16px;font-size:12px;font-weight:600;cursor:pointer">Deliberate ❯</button>
+  <div class="p-3 bg-[#10121e] border-t border-gray-800">
+    <div class="flex items-center gap-2 flex-wrap">
+      <button id="warroom-mic-btn" onclick="toggleWarRoomMic()" style="background:#1e293b;color:#fff;border:1px solid #3b82f6;border-radius:8px;padding:8px 14px;font-size:12px;font-weight:600;display:flex;align-items:center;gap:6px;cursor:pointer;white-space:nowrap">
+        <span id="warroom-mic-icon">🎤</span> <span id="warroom-mic-text">Speak</span>
+      </button>
+      <button type="button" class="always-listen-btn" onclick="toggleAlwaysListen()">
+        <span class="always-listen-dot"></span><span class="always-listen-label">Always Listening: OFF</span>
+      </button>
+      <label class="flex items-center gap-1.5 text-xs text-gray-500" style="white-space:nowrap">
+        Wake word
+        <input class="always-listen-word" value="jarvis" spellcheck="false" oninput="setAlwaysListenWord(this.value)" style="width:72px">
+      </label>
+      <input type="text" id="warroom-input" placeholder="Ask the Council a question (all agents deliberate & consolidate)..." style="flex:1;min-width:160px;background:#08090f;border:1px solid #334155;border-radius:8px;padding:8px 12px;color:#fff;font-size:12px;outline:none" onkeydown="if(event.key==='Enter'){sendWarRoomSpeech()}">
+      <button id="warroom-send-btn" onclick="sendWarRoomSpeech()" style="background:#2563eb;color:#fff;border:none;border-radius:8px;padding:8px 16px;font-size:12px;font-weight:600;cursor:pointer">Deliberate ❯</button>
+    </div>
+    <p class="always-listen-privacy" style="display:none">Ambient audio stays local until the wake word is heard.</p>
   </div>
 </div>
 
@@ -4531,6 +4933,15 @@ async function abortProcessing() {
   </div>
   <div class="p-5 space-y-4 text-xs">
     <p class="text-gray-400">Configure your third-party AI provider keys here (OpenRouter, OpenAI, Anthropic, DeepSeek, Groq, Ollama). They are saved securely to your <code>.env</code> file and applied to all agents in real time.</p>
+
+    <div style="background:#040817;border:1px solid rgba(59,130,246,0.28);border-radius:8px;padding:10px">
+      <div class="flex items-center gap-2 mb-1">
+        <span>🔀</span>
+        <label class="font-bold text-gray-200">OmniRouter · per-agent route</label>
+      </div>
+      <p class="text-gray-500 mb-2" style="font-size:11px">One switch per agent. On points that CLI at the local router; off restores its own keys. Keys stay masked.</p>
+      <div id="omnirouter-list-modal"><div class="text-xs text-gray-600 py-1">Loading overrides...</div></div>
+    </div>
     
     <!-- OpenRouter -->
     <div style="background:#1a1a1a;border:1px solid #2a2a2a;border-radius:8px;padding:10px">

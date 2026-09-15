@@ -22,6 +22,11 @@
 //    delegate_to_agent  hand a task to another agent
 //    list_skills        see which reusable skills are installed
 //    use_skill          invoke one of them
+//    cron               list / create / cancel scheduled tasks (Hermes cronjob_manage, OpenClaw cron)
+//    device             ADB phone/TV control (OpenClaw nodes analog; not desktop computer_use)
+//    syncthing          mesh status / rescan across machines
+//    meeting            join/leave/transcribe/speak in a live call (Recall.ai bot)
+//    goal               create / list / step / status / abandon / resume autonomous goals
 //
 //  (bash / read_file / write_file stay for the bare-model case, where the
 //   engine drives a raw Hermes model that has no CLI of its own underneath.)
@@ -54,6 +59,11 @@ const { globalApprovalGate } = require('./SecurityApprovalGate');
  *   skills        core/SkillRegistry.js    list() -> skills[] ; use(name, { args, chatId, agentId })
  *   agents        live agent roster: a plain object keyed by agent id, a Map, an
  *                 array, a () => roster function, or an object with listAgents().
+ *   scheduler     core/Scheduler.js        listTasks / scheduleTask / cancelTask
+ *   devices       core/DeviceAutomation.js listDevices / tap / swipe / ...
+ *   syncthing     core/SyncthingBridge.js  overview / rescan
+ *   meetingBot    core/MeetingBot.js       join / leave / status / transcript / speak / listActive
+ *   goalEngine    core/GoalEngine.js       create / list / step / get / abandon / resume
  *
  * The last three are guardrails. They default to the process-wide singletons
  * and are only ever overridden by tests.
@@ -64,6 +74,11 @@ const DEPENDENCY_KEYS = [
     'delegation',
     'skills',
     'agents',
+    'scheduler',
+    'devices',
+    'syncthing',
+    'meetingBot',
+    'goalEngine',
     'approvalGate',
     'loopGuard',
     'truncator',
@@ -81,6 +96,11 @@ class HermesToolEngine {
             delegation: null,
             skills: null,
             agents: null,
+            scheduler: null,
+            devices: null,
+            syncthing: null,
+            meetingBot: null,
+            goalEngine: null,
             approvalGate: globalApprovalGate,
             loopGuard: globalLoopGuard,
             truncator: globalTruncator,
@@ -88,6 +108,7 @@ class HermesToolEngine {
         this.configure(dependencies);
         this._registerDefaultTools();
         this._registerOrchestrationTools();
+        this._registerCapabilityTools();
     }
 
     /**
@@ -677,7 +698,7 @@ class HermesToolEngine {
                 }
                 const skillArgs = (args.args && typeof args.args === 'object') ? args.args : {};
                 this._guard(skillArgs, { tool: 'use_skill', field: 'skill arguments' });
-                const use = this._method(skills, ['use', 'useSkill', 'run', 'invoke', 'execute'], {
+                const use = this._method(skills, ['use', 'useSkill', 'run', 'invoke', 'execute', 'get'], {
                     key: 'skills',
                     label: 'skills',
                 });
@@ -688,6 +709,482 @@ class HermesToolEngine {
                 });
                 return { skill: name, result: result === undefined ? null : result };
             },
+        );
+    }
+
+    // =========================================================================
+    //  NATIVE CAPABILITY TOOLS (cron / device / syncthing / meeting / goal)
+    //  Each one already has a core/ module; this just exposes it to the model.
+    // =========================================================================
+
+    _registerCapabilityTools() {
+        // 10. Cron — Hermes cronjob_manage / OpenClaw cron
+        this.registerTool(
+            'cron',
+            'List, create, or cancel scheduled tasks (Hermes cronjob_manage / OpenClaw cron). '
+            + 'action=list (default) shows upcoming jobs; action=create needs a 5-field cron '
+            + 'schedule and a prompt; action=cancel needs taskId from list.',
+            {
+                type: 'object',
+                properties: {
+                    action: { type: 'string', description: 'list | create | cancel (default list)' },
+                    schedule: { type: 'string', description: '5-field cron, e.g. "0 9 * * 1-5"' },
+                    prompt: { type: 'string', description: 'What to run when the job fires (create)' },
+                    agentId: { type: 'string', description: 'Agent that should run it (create)' },
+                    taskId: { type: 'string', description: 'Id from list (cancel)' },
+                    chatId: { type: 'string', description: 'Chat to attach the job to' },
+                },
+                required: [],
+            },
+            async (args = {}, ctx = {}) => {
+                const scheduler = this._dep('scheduler', 'scheduler');
+                const action = String(args.action || 'list').trim().toLowerCase();
+                const chatId = args.chatId || ctx.chatId || '';
+
+                if (action === 'list') {
+                    const list = this._method(scheduler, ['listTasks', 'getScheduledTasks', 'list'], {
+                        key: 'scheduler',
+                        label: 'scheduler',
+                    });
+                    const items = this._toArray(await list(chatId || undefined), 'tasks');
+                    return { count: items.length, tasks: items.map(t => this._shapeCronTask(t)) };
+                }
+
+                if (action === 'create') {
+                    const schedule = String(args.schedule || '').trim();
+                    const prompt = String(args.prompt || '').trim();
+                    if (!schedule) throw new Error("cron create requires a 5-field 'schedule' (e.g. '0 9 * * 1-5').");
+                    if (!prompt) throw new Error("cron create requires a non-empty 'prompt' describing what to run.");
+                    this._guard(prompt, { tool: 'cron', field: 'scheduled prompt' });
+                    const create = this._method(scheduler, ['scheduleTask', 'schedule'], {
+                        key: 'scheduler',
+                        label: 'scheduler',
+                    });
+                    const task = await create({
+                        chatId,
+                        agentId: String(args.agentId || ctx.agentId || 'main'),
+                        prompt,
+                        schedule,
+                    });
+                    return { created: true, task: this._shapeCronTask(task) };
+                }
+
+                if (action === 'cancel') {
+                    const taskId = String(args.taskId || args.id || '').trim();
+                    if (!taskId) throw new Error("cron cancel requires 'taskId' from cron action=list.");
+                    const cancel = this._method(scheduler, ['cancelTask', 'deleteScheduledTask', 'cancel'], {
+                        key: 'scheduler',
+                        label: 'scheduler',
+                    });
+                    const result = await cancel(taskId);
+                    const cancelled = result && typeof result === 'object' && Object.prototype.hasOwnProperty.call(result, 'cancelled')
+                        ? Boolean(result.cancelled)
+                        : result !== false && result !== null && result !== undefined;
+                    return { cancelled, taskId, result: result === undefined ? null : result };
+                }
+
+                throw new Error(`Unknown cron action '${action}'. Use list, create, or cancel.`);
+            },
+        );
+
+        // 11. Device — OpenClaw nodes analog (ADB phones/TVs, not desktop CUA)
+        this.registerTool(
+            'device',
+            'Control paired Android phones and TVs over ADB (OpenClaw nodes analog). '
+            + 'action=list (default) shows devices; screenshot, tap, swipe, text, key, '
+            + 'launch, remote, and connect act on one serial.',
+            {
+                type: 'object',
+                properties: {
+                    action: { type: 'string', description: 'list | screenshot | tap | swipe | text | key | launch | remote | connect | keys' },
+                    serial: { type: 'string', description: 'Device serial from action=list' },
+                    x: { type: 'number', description: 'Tap/swipe start X' },
+                    y: { type: 'number', description: 'Tap/swipe start Y' },
+                    x2: { type: 'number', description: 'Swipe end X' },
+                    y2: { type: 'number', description: 'Swipe end Y' },
+                    durationMs: { type: 'number', description: 'Swipe duration in ms' },
+                    text: { type: 'string', description: 'Text to type (action=text)' },
+                    key: { type: 'string', description: 'Named remote key or numeric keycode' },
+                    package: { type: 'string', description: 'Android package to launch' },
+                    host: { type: 'string', description: 'IP/host for action=connect' },
+                    port: { type: 'number', description: 'ADB port (default 5555)' },
+                },
+                required: [],
+            },
+            async (args = {}) => {
+                const devices = this._dep('devices', 'device automation');
+                const action = String(args.action || 'list').trim().toLowerCase();
+                const serial = args.serial || args.targetSerial || null;
+                return this._dispatchDevice(devices, action, args, serial);
+            },
+        );
+
+        // 12. Syncthing — mesh status / rescan (native; neither upstream vendors this)
+        this.registerTool(
+            'syncthing',
+            'Inspect the Syncthing mesh that keeps memory, vault, and workspaces identical '
+            + 'across machines. action=status (default) is read-only; action=rescan forces a folder scan. '
+            + 'Never auto-accepts pairing requests.',
+            {
+                type: 'object',
+                properties: {
+                    action: { type: 'string', description: 'status | rescan (default status)' },
+                    folderId: { type: 'string', description: 'Folder id to rescan; omit for all' },
+                },
+                required: [],
+            },
+            async (args = {}) => {
+                const syncthing = this._dep('syncthing', 'syncthing');
+                const action = String(args.action || 'status').trim().toLowerCase();
+                if (action === 'status' || action === 'overview') {
+                    const overview = this._method(syncthing, ['overview', 'status'], {
+                        key: 'syncthing',
+                        label: 'syncthing',
+                    });
+                    return overview();
+                }
+                if (action === 'rescan' || action === 'scan') {
+                    const rescan = this._method(syncthing, ['rescan', 'scan'], {
+                        key: 'syncthing',
+                        label: 'syncthing',
+                    });
+                    return rescan(args.folderId || null);
+                }
+                throw new Error(`Unknown syncthing action '${action}'. Use status or rescan.`);
+            },
+        );
+
+        // 13. Meeting bot — join, transcribe, and speak (Recall output_audio + Google TTS)
+        this.registerTool(
+            'meeting',
+            'Put a bot into a live Zoom / Google Meet / Teams call (Recall.ai), '
+            + 'inspect its transcript, or speak a line of TTS audio into the call. '
+            + 'Speaking needs RECALL_API_KEY and uses Google Translate TTS. '
+            + 'action=join|leave|status|transcript|speak|list.',
+            {
+                type: 'object',
+                properties: {
+                    action: { type: 'string', description: 'join | leave | status | transcript | speak | list (default list)' },
+                    meetUrl: { type: 'string', description: 'Meeting link (join)' },
+                    botId: { type: 'string', description: 'Bot id from join/list' },
+                    sessionId: { type: 'string', description: 'Existing meeting session to attach (join)' },
+                    botName: { type: 'string', description: 'Display name shown in the call (join)' },
+                    chatId: { type: 'string', description: 'Chat to save a transcript into' },
+                    text: { type: 'string', description: 'Words to speak into the call (speak)' },
+                    lang: { type: 'string', description: 'TTS language code, default en (speak)' },
+                },
+                required: [],
+            },
+            async (args = {}, ctx = {}) => {
+                const bot = this._dep('meetingBot', 'meeting bot');
+                const action = String(args.action || 'list').trim().toLowerCase();
+
+                if (action === 'list') {
+                    const list = this._method(bot, ['listActive', 'list', 'describe'], {
+                        key: 'meetingBot',
+                        label: 'meeting bot',
+                    });
+                    const items = await list();
+                    const arr = this._toArray(items, 'active');
+                    return Array.isArray(items) || items && items.active
+                        ? { count: arr.length, meetings: arr }
+                        : items;
+                }
+
+                if (action === 'join') {
+                    const meetUrl = String(args.meetUrl || args.url || '').trim();
+                    if (!meetUrl) throw new Error("meeting join requires 'meetUrl'.");
+                    const join = this._method(bot, ['join'], { key: 'meetingBot', label: 'meeting bot' });
+                    return join({
+                        meetUrl,
+                        sessionId: args.sessionId || null,
+                        botName: args.botName || undefined,
+                    });
+                }
+
+                if (action === 'leave') {
+                    const botId = String(args.botId || args.id || '').trim();
+                    if (!botId) throw new Error("meeting leave requires 'botId' from meeting action=list.");
+                    const leave = this._method(bot, ['leave'], { key: 'meetingBot', label: 'meeting bot' });
+                    return leave(botId);
+                }
+
+                if (action === 'status') {
+                    const botId = String(args.botId || args.id || '').trim();
+                    if (!botId) {
+                        const describe = this._method(bot, ['describe', 'status'], {
+                            key: 'meetingBot',
+                            label: 'meeting bot',
+                        });
+                        return describe();
+                    }
+                    const status = this._method(bot, ['status'], { key: 'meetingBot', label: 'meeting bot' });
+                    return status(botId);
+                }
+
+                if (action === 'transcript') {
+                    const botId = String(args.botId || args.id || '').trim();
+                    if (!botId) throw new Error("meeting transcript requires 'botId'.");
+                    const transcript = this._method(bot, ['transcript'], {
+                        key: 'meetingBot',
+                        label: 'meeting bot',
+                    });
+                    return transcript(botId);
+                }
+
+                if (action === 'speak') {
+                    const botId = String(args.botId || args.id || '').trim();
+                    const text = String(args.text || args.message || '').trim();
+                    if (!botId) throw new Error("meeting speak requires 'botId'.");
+                    if (!text) throw new Error("meeting speak requires 'text'.");
+                    const speak = this._method(bot, ['speak'], { key: 'meetingBot', label: 'meeting bot' });
+                    return speak(botId, text, { lang: args.lang || undefined });
+                }
+
+                throw new Error(`Unknown meeting action '${action}'. Use join, leave, status, transcript, speak, or list.`);
+            },
+        );
+
+        // 14. Goal engine — autonomous persistent goals (native; not an upstream tool)
+        this.registerTool(
+            'goal',
+            'Create and pursue autonomous goals that persist across sessions and advance one step at a time. '
+            + 'action=list (default) shows goals; action=create needs a title; '
+            + 'action=step/status/abandon/resume need goalId from list.',
+            {
+                type: 'object',
+                properties: {
+                    action: { type: 'string', description: 'create | list | step | status | abandon | resume (default list)' },
+                    title: { type: 'string', description: 'Goal title (create)' },
+                    description: { type: 'string', description: 'What done looks like (create)' },
+                    goalId: { type: 'string', description: 'Id from list (step/status/abandon/resume)' },
+                    reason: { type: 'string', description: 'Why the goal is being abandoned (abandon)' },
+                    status: { type: 'string', description: 'Filter list by status' },
+                    chatId: { type: 'string', description: 'Chat to attach or filter by' },
+                    ownerAgent: { type: 'string', description: 'Agent that owns the goal (create)' },
+                    limit: { type: 'number', description: 'Max goals to list (default 50)' },
+                },
+                required: [],
+            },
+            async (args = {}, ctx = {}) => {
+                const goalEngine = this._dep('goalEngine', 'goal engine');
+                const action = String(args.action || 'list').trim().toLowerCase();
+                const chatId = args.chatId || ctx.chatId || '';
+                const goalId = String(args.goalId || args.id || '').trim();
+
+                if (action === 'list') {
+                    const list = this._method(goalEngine, ['list'], {
+                        key: 'goalEngine',
+                        label: 'goal engine',
+                    });
+                    const items = this._toArray(await list({
+                        status: args.status || null,
+                        chatId: chatId || null,
+                        limit: args.limit,
+                    }), 'goals');
+                    return { count: items.length, goals: items.map(g => this._shapeGoal(g)) };
+                }
+
+                if (action === 'create') {
+                    const title = String(args.title || '').trim();
+                    if (!title) throw new Error("goal create requires a non-empty 'title'.");
+                    const description = String(args.description || '').trim();
+                    this._guard(title, { tool: 'goal', field: 'goal title' });
+                    if (description) this._guard(description, { tool: 'goal', field: 'goal description' });
+                    const create = this._method(goalEngine, ['create'], {
+                        key: 'goalEngine',
+                        label: 'goal engine',
+                    });
+                    const goal = await create({
+                        title,
+                        description,
+                        chatId,
+                        ownerAgent: String(args.ownerAgent || ctx.agentId || ''),
+                    });
+                    return { created: true, goal: this._shapeGoal(goal) };
+                }
+
+                if (action === 'step') {
+                    if (!goalId) throw new Error("goal step requires 'goalId' from goal action=list.");
+                    const step = this._method(goalEngine, ['step'], {
+                        key: 'goalEngine',
+                        label: 'goal engine',
+                    });
+                    return step(goalId);
+                }
+
+                if (action === 'status') {
+                    if (!goalId) {
+                        if (typeof goalEngine.summary === 'function') {
+                            return goalEngine.summary();
+                        }
+                        const list = this._method(goalEngine, ['list'], {
+                            key: 'goalEngine',
+                            label: 'goal engine',
+                        });
+                        const items = this._toArray(await list({ chatId: chatId || null }), 'goals');
+                        return { count: items.length, goals: items.map(g => this._shapeGoal(g)) };
+                    }
+                    const get = this._method(goalEngine, ['get', 'status'], {
+                        key: 'goalEngine',
+                        label: 'goal engine',
+                    });
+                    const goal = await get(goalId);
+                    if (!goal) throw new Error(`No goal with id '${goalId}'.`);
+                    return { goal: this._shapeGoal(goal, { detail: true }) };
+                }
+
+                if (action === 'abandon') {
+                    if (!goalId) throw new Error("goal abandon requires 'goalId' from goal action=list.");
+                    const reason = String(args.reason || '').trim();
+                    if (reason) this._guard(reason, { tool: 'goal', field: 'abandon reason' });
+                    const abandon = this._method(goalEngine, ['abandon'], {
+                        key: 'goalEngine',
+                        label: 'goal engine',
+                    });
+                    const goal = await abandon(goalId, reason);
+                    if (!goal) throw new Error(`No goal with id '${goalId}'.`);
+                    return { abandoned: true, goal: this._shapeGoal(goal) };
+                }
+
+                if (action === 'resume') {
+                    if (!goalId) throw new Error("goal resume requires 'goalId' from goal action=list.");
+                    const resume = this._method(goalEngine, ['resume'], {
+                        key: 'goalEngine',
+                        label: 'goal engine',
+                    });
+                    const goal = await resume(goalId);
+                    if (!goal) throw new Error(`No goal with id '${goalId}'.`);
+                    return { resumed: true, goal: this._shapeGoal(goal) };
+                }
+
+                throw new Error(`Unknown goal action '${action}'. Use create, list, step, status, abandon, or resume.`);
+            },
+        );
+    }
+
+    _shapeCronTask(task) {
+        if (!task || typeof task !== 'object') return task;
+        return {
+            id: task.id,
+            chatId: task.chatId !== undefined ? task.chatId : task.chat_id,
+            agentId: task.agentId !== undefined ? task.agentId : task.agent_id,
+            prompt: task.prompt,
+            schedule: task.schedule,
+            nextRun: task.nextRun !== undefined ? task.nextRun : task.next_run,
+            status: task.status,
+            lastResult: task.lastResult !== undefined ? task.lastResult : task.last_result,
+        };
+    }
+
+    _shapeGoal(goal, { detail = false } = {}) {
+        if (!goal || typeof goal !== 'object') return goal;
+        const shaped = {
+            id: goal.id,
+            title: goal.title,
+            description: goal.description,
+            status: goal.status,
+            progress: goal.progress,
+            attempts: goal.attempts,
+            maxAttempts: goal.maxAttempts !== undefined ? goal.maxAttempts : goal.max_attempts,
+            chatId: goal.chatId !== undefined ? goal.chatId : goal.chat_id,
+            ownerAgent: goal.ownerAgent !== undefined ? goal.ownerAgent : goal.owner_agent,
+            lastError: goal.lastError !== undefined ? goal.lastError : goal.last_error,
+            stepCount: goal.stepCount,
+            done: goal.done,
+            createdAt: goal.createdAt !== undefined ? goal.createdAt : goal.created_at,
+            updatedAt: goal.updatedAt !== undefined ? goal.updatedAt : goal.updated_at,
+            completedAt: goal.completedAt !== undefined ? goal.completedAt : goal.completed_at,
+        };
+        if (detail) {
+            const steps = Array.isArray(goal.steps) ? goal.steps : [];
+            shaped.steps = steps.map((step) => {
+                if (!step || typeof step !== 'object') return step;
+                return {
+                    id: step.id,
+                    title: step.title || step.name || step.description,
+                    status: step.status,
+                    error: step.error || null,
+                };
+            });
+        }
+        return shaped;
+    }
+
+    async _dispatchDevice(devices, action, args, serial) {
+        if (action === 'list') {
+            const list = this._method(devices, ['listDevices', 'list'], {
+                key: 'devices',
+                label: 'device automation',
+            });
+            const items = this._toArray(await list(true), 'devices');
+            return { count: items.length, devices: items };
+        }
+        if (action === 'keys') {
+            if (typeof devices.getRemoteKeys === 'function') {
+                return { keys: devices.getRemoteKeys() };
+            }
+            throw new Error('device automation does not expose getRemoteKeys().');
+        }
+        if (action === 'screenshot') {
+            const shot = this._method(devices, ['captureScreenshot', 'screenshot'], {
+                key: 'devices',
+                label: 'device automation',
+            });
+            return shot(serial);
+        }
+        if (action === 'tap') {
+            if (args.x === undefined || args.y === undefined) {
+                throw new Error('device tap requires numeric x and y.');
+            }
+            const tap = this._method(devices, ['tap'], { key: 'devices', label: 'device automation' });
+            return tap(args.x, args.y, serial);
+        }
+        if (action === 'swipe') {
+            if ([args.x, args.y, args.x2, args.y2].some(v => v === undefined)) {
+                throw new Error('device swipe requires x, y, x2, y2.');
+            }
+            const swipe = this._method(devices, ['swipe'], { key: 'devices', label: 'device automation' });
+            return swipe(args.x, args.y, args.x2, args.y2, args.durationMs || 300, serial);
+        }
+        if (action === 'text') {
+            const text = String(args.text || '').trim();
+            if (!text) throw new Error("device text requires a non-empty 'text' string.");
+            this._guard(text, { tool: 'device', field: 'typed text' });
+            const type = this._method(devices, ['inputText', 'type'], {
+                key: 'devices',
+                label: 'device automation',
+            });
+            return type(text, serial);
+        }
+        if (action === 'key' || action === 'remote') {
+            const key = args.key || args.name;
+            if (key === undefined || key === null || String(key).trim() === '') {
+                throw new Error("device key/remote requires 'key' (named remote button or numeric keycode).");
+            }
+            const press = action === 'remote' || (typeof key === 'string' && /[a-z]/i.test(String(key)))
+                ? this._method(devices, ['remoteKey', 'pressKey', 'key'], { key: 'devices', label: 'device automation' })
+                : this._method(devices, ['pressKey', 'remoteKey', 'key'], { key: 'devices', label: 'device automation' });
+            return press(key, serial);
+        }
+        if (action === 'launch') {
+            const pkg = String(args.package || args.app || '').trim();
+            if (!pkg) throw new Error("device launch requires 'package'.");
+            this._guard(pkg, { tool: 'device', field: 'package name' });
+            const launch = this._method(devices, ['launchApp', 'launch'], {
+                key: 'devices',
+                label: 'device automation',
+            });
+            return launch(pkg, serial);
+        }
+        if (action === 'connect') {
+            const host = String(args.host || '').trim();
+            if (!host) throw new Error("device connect requires 'host' (IP or hostname).");
+            const connect = this._method(devices, ['connect'], { key: 'devices', label: 'device automation' });
+            return connect(host, args.port);
+        }
+        throw new Error(
+            `Unknown device action '${action}'. Use list, screenshot, tap, swipe, text, key, launch, remote, connect, or keys.`
         );
     }
 }

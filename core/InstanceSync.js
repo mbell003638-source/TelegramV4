@@ -414,6 +414,17 @@ class InstanceSync {
         return found;
     }
 
+    /**
+     * Identify an inbound caller by the instance id it claims. Token-free, so
+     * the HTTP layer can resolve a shared-secret bootstrap to a *registered*
+     * peer's opt-in scopes. Unknown ids return null — they are never auto-added.
+     */
+    peerForId(id) {
+        const peer = this.peers.get(String(id || '').trim());
+        if (!peer) return null;
+        return { id: peer.id, url: peer.url, scopes: peer.scopes.slice() };
+    }
+
     _maskPeer(peer) {
         const state = this._peerState(peer.id);
         return {
@@ -1014,6 +1025,12 @@ class InstanceSync {
             'X-Instance-Token': token || '',
             'X-Instance-Id': this.selfId,
         };
+        // Bootstrap path: a registered peer that has not yet exchanged a
+        // per-peer token can still authenticate with the shared secret.
+        // The remote side still refuses unknown X-Instance-Id values.
+        if (this.sharedSecret) {
+            headers['X-Instance-Secret'] = String(this.sharedSecret);
+        }
         if (this.transport) {
             return Promise.resolve().then(() => this.transport({ method, url, body, headers, token }));
         }
