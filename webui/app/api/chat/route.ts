@@ -1,165 +1,283 @@
 import { NextResponse } from 'next/server';
 import { appendChatToObsidian, saveSessionMessage } from '@/lib/obsidian';
-import { spawn } from 'child_process';
-import path from 'path';
-import fs from 'fs';
-import os from 'os';
-import { bridgeUrl } from '@/lib/config';
+import { BRIDGE_URL, bridgeUrl } from '@/lib/config';
 
 export const dynamic = 'force-dynamic';
 
-function stripAnsi(str: string): string {
-  return str.replace(/[\u001B\u009B][[\]()#;?]*(?:(?:(?:[a-zA-Z\d]*(?:;[-a-zA-Z\d\/#&.:=?%@~_]+)*)?\u0007)|(?:(?:\d{1,4}(?:[;:]\d{0,4})*)?[\dA-PR-TZcf-nq-uy=><~]))/g, '');
+/**
+ * Agent execution for the WebUI goes through ONE path: an HTTP POST to the
+ * bridge (`core/MissionControl.js` -> `/api/chat/send`). The WebUI must never
+ * spawn a CLI agent itself, because the bridge is where every safety mechanism
+ * lives: the LLM_SPAWN_ENABLED kill switch (core/KillSwitches.js), outbound DLP
+ * (core/ExfiltrationGuard.js), the security approval gate, AgentPool
+ * concurrency, LoopGuard, the audit log, and the shared cross-agent
+ * conversation context in core/SessionStore.js.
+ *
+ * The bridge dispatch is asynchronous: `POST /api/chat/send` accepts
+ * `{ message, agentId, model, chatId }` and answers immediately with
+ * `{ success: true, agent }` (or a non-2xx `{ ok: false, error }` when a kill
+ * switch or the auth token blocks it). The agent's real answer is appended to
+ * the bridge's own conversation history once the run finishes, so we poll
+ * `GET /api/chat/history?chatId=...` for a genuinely NEW assistant turn.
+ *
+ * If no real reply ever arrives we return `ok: false` with the actual reason.
+ * We never invent a reply, and nothing is written to Obsidian as an agent
+ * message unless the agent really produced it.
+ */
+
+/** Ceiling for any single bridge HTTP round trip. */
+const BRIDGE_REQUEST_TIMEOUT_MS = 15_000;
+
+/** Total time we will wait for the agent's real reply to be recorded. */
+const REPLY_TIMEOUT_MS = Number(process.env.WEBUI_AGENT_REPLY_TIMEOUT_MS) || 120_000;
+
+/** Delay between conversation-history polls while waiting for the reply. */
+const REPLY_POLL_INTERVAL_MS = 1_200;
+
+type FailureReason =
+  | 'bad_request'
+  | 'bridge_unreachable'
+  | 'bridge_timeout'
+  | 'bridge_rejected'
+  | 'reply_timeout'
+  | 'internal_error';
+
+interface BridgeFailure {
+  reason: FailureReason;
+  error: string;
+  status: number;
 }
 
-async function runCliCommand(binaryPath: string, args: string[], timeoutMs = 25000): Promise<string> {
-  return new Promise((resolve, reject) => {
-    let child: any;
-    try {
-      child = spawn(binaryPath, args, {
-        stdio: ['ignore', 'pipe', 'pipe'],
-        windowsHide: true,
-        env: { ...process.env, CI: 'true', NO_COLOR: '1' },
-      });
-    } catch (e) {
-      return reject(e);
-    }
+/** A failure we already fully described (e.g. a non-2xx from the bridge). */
+class BridgeError extends Error {
+  failure: BridgeFailure;
+  constructor(failure: BridgeFailure) {
+    super(failure.error);
+    this.name = 'BridgeError';
+    this.failure = failure;
+  }
+}
 
-    let stdout = '';
-    let stderr = '';
+/**
+ * Turns a thrown fetch error into a reported reason, keeping a timeout
+ * distinct from a connection failure -- they mean very different things:
+ * a timeout means the bridge is up but slow/stuck, unreachable means it
+ * is not running at all.
+ */
+function toBridgeFailure(err: unknown, whileDoing: string): BridgeFailure {
+  if (err instanceof BridgeError) return err.failure;
 
-    const timer = setTimeout(() => {
-      try { child.kill('SIGTERM'); } catch {}
-      reject(new Error(`CLI command timed out after ${Math.round(timeoutMs / 1000)}s`));
-    }, timeoutMs);
+  const name = (err as { name?: string } | null)?.name;
+  if (name === 'TimeoutError' || name === 'AbortError') {
+    return {
+      reason: 'bridge_timeout',
+      error:
+        `Timed out after ${Math.round(BRIDGE_REQUEST_TIMEOUT_MS / 1000)}s while trying to ` +
+        `${whileDoing}. The agent bridge at ${BRIDGE_URL} accepted the connection but did not respond.`,
+      status: 504,
+    };
+  }
 
-    child.stdout?.on('data', (d: any) => { stdout += d.toString(); });
-    child.stderr?.on('data', (d: any) => { stderr += d.toString(); });
+  const cause = (err as { cause?: { code?: string; message?: string } } | null)?.cause;
+  const detail =
+    cause?.code || cause?.message || (err as { message?: string } | null)?.message || String(err);
+  return {
+    reason: 'bridge_unreachable',
+    error:
+      `Could not connect to the agent bridge at ${BRIDGE_URL} while trying to ${whileDoing} ` +
+      `(${detail}). Start the bridge (node index.js) and retry.`,
+    status: 502,
+  };
+}
 
-    child.on('error', (err: any) => {
-      clearTimeout(timer);
-      reject(err);
-    });
+function failureResponse(failure: BridgeFailure, sessionId: string) {
+  console.error(`[AgenticOS] chat dispatch failed (${failure.reason}): ${failure.error}`);
+  return NextResponse.json(
+    {
+      ok: false,
+      reason: failure.reason,
+      error: failure.error,
+      sessionId,
+      // The user's own message is still logged, but no agent reply was.
+      savedToObsidian: false,
+    },
+    { status: failure.status }
+  );
+}
 
-    child.on('close', (code: number) => {
-      clearTimeout(timer);
-      const cleanOut = stripAnsi(stdout).trim();
-      const cleanErr = stripAnsi(stderr).trim();
-      if (cleanOut) {
-        resolve(cleanOut);
-      } else if (code === 0) {
-        resolve(cleanErr || 'Command completed successfully with no output.');
-      } else {
-        reject(new Error(cleanErr || `Process exited with code ${code}`));
-      }
-    });
+interface BridgeTurn {
+  role?: string;
+  content?: string;
+  source?: string;
+  timestamp?: number;
+}
+
+/** Reads the bridge's conversation history for one chat id. */
+async function fetchAssistantTurns(chatId: string): Promise<BridgeTurn[]> {
+  const res = await fetch(bridgeUrl('/api/chat/history', { chatId }), {
+    cache: 'no-store',
+    signal: AbortSignal.timeout(BRIDGE_REQUEST_TIMEOUT_MS),
   });
+
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    throw new BridgeError({
+      reason: 'bridge_rejected',
+      error:
+        (body && typeof body.error === 'string' && body.error) ||
+        `Bridge returned HTTP ${res.status} for /api/chat/history.`,
+      status: res.status === 401 || res.status === 403 ? res.status : 502,
+    });
+  }
+
+  const data = (await res.json()) as { turns?: BridgeTurn[] };
+  const turns = Array.isArray(data?.turns) ? data.turns : [];
+  return turns.filter(
+    (t) => t?.role === 'assistant' && typeof t.content === 'string' && t.content.trim().length > 0
+  );
 }
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 export async function POST(req: Request) {
+  let currentSessionId = '';
+
   try {
-    const { message, agentId, agentName, sessionId, model } = await req.json();
+    const body = await req.json().catch(() => null);
+    const message: unknown = body?.message;
+    const agentId: unknown = body?.agentId;
+    const agentName: unknown = body?.agentName;
+    const sessionId: unknown = body?.sessionId;
+    const model: unknown = body?.model;
 
-    if (!message || !message.trim()) {
-      return NextResponse.json({ ok: false, error: 'Message is required' }, { status: 400 });
+    if (typeof message !== 'string' || !message.trim()) {
+      return NextResponse.json(
+        { ok: false, reason: 'bad_request' satisfies FailureReason, error: 'Message is required' },
+        { status: 400 }
+      );
     }
 
-    const currentSessionId = sessionId || `session_${Date.now()}`;
-    const userProfile = process.env.USERPROFILE || os.homedir();
-    const localAppData = process.env.LOCALAPPDATA || path.join(userProfile, 'AppData', 'Local');
+    currentSessionId = typeof sessionId === 'string' && sessionId ? sessionId : `session_${Date.now()}`;
+    const agentKey = typeof agentId === 'string' && agentId ? agentId : 'agent';
+    const displayName = typeof agentName === 'string' && agentName ? agentName : agentKey;
 
-    // 1. Log User Message to Obsidian (Daily log + Session store)
-    appendChatToObsidian(agentName || agentId, 'user', message);
-    saveSessionMessage(agentId, currentSessionId, 'user', message, 'You');
+    // 1. Log the user's own message. This is real, user-authored content.
+    appendChatToObsidian(displayName, 'user', message);
+    saveSessionMessage(agentKey, currentSessionId, 'user', message, 'You');
 
-    let reply = '';
-    let engineSource = 'cli';
-
-    // 2. Map Agent to Real Local Binary
-    const agentKey = (agentId || '').toLowerCase();
-
+    // 2. Snapshot the bridge's history BEFORE dispatching so a genuinely new
+    //    assistant turn can be told apart from an older one in this session.
+    //    This also proves the bridge is reachable before we claim anything.
+    let baselineReplyCount: number;
     try {
-      if (agentKey === 'antigravity') {
-        const agyPath = path.join(localAppData, 'agy', 'bin', 'agy.exe');
-        if (fs.existsSync(agyPath)) {
-          const args = ['-p', message, '--dangerously-skip-permissions'];
-          if (sessionId) args.push('--conversation', sessionId);
-          reply = await runCliCommand(agyPath, args, 30000);
-        }
-      } else if (agentKey === 'grok') {
-        const grokPath = path.join(userProfile, '.grok', 'bin', 'grok.exe');
-        if (fs.existsSync(grokPath)) {
-          const args = ['-p', message, '--always-approve'];
-          if (sessionId && sessionId.includes('-')) args.push('--resume', sessionId);
-          reply = await runCliCommand(grokPath, args, 30000);
-        }
-      } else if (agentKey === 'claude') {
-        const claudePath = path.join(userProfile, '.local', 'bin', 'claude.exe');
-        if (fs.existsSync(claudePath)) {
-          const args = ['-p', message, '--dangerously-skip-permissions'];
-          if (sessionId && sessionId.includes('-')) args.push('--resume', sessionId);
-          reply = await runCliCommand(claudePath, args, 30000);
-        }
-      } else if (agentKey === 'codex') {
-        const codexPath = path.join(localAppData, 'Programs', 'OpenAI', 'Codex', 'bin', 'codex.exe');
-        if (fs.existsSync(codexPath)) {
-          const args = ['exec', '--dangerously-bypass-approvals-and-sandbox', message];
-          reply = await runCliCommand(codexPath, args, 30000);
-        }
-      } else if (agentKey === 'hermes') {
-        const hermesPath = path.join(localAppData, 'hermes', 'bin', 'hermes.exe');
-        if (fs.existsSync(hermesPath)) {
-          const args = ['-z', message, '--yolo'];
-          reply = await runCliCommand(hermesPath, args, 25000);
-        }
-      } else if (agentKey === 'opencode') {
-        const opencodePs1 = path.join(process.env.APPDATA || '', 'npm', 'opencode.ps1');
-        if (fs.existsSync(opencodePs1)) {
-          reply = await runCliCommand('powershell.exe', ['-ExecutionPolicy', 'Bypass', '-File', opencodePs1, message], 25000);
-        }
-      }
-    } catch (cliErr: any) {
-      console.warn(`[AgenticOS] Local CLI execution error for ${agentKey}:`, cliErr.message);
+      baselineReplyCount = (await fetchAssistantTurns(currentSessionId)).length;
+    } catch (err) {
+      return failureResponse(toBridgeFailure(err, 'read the conversation history'), currentSessionId);
     }
 
-    // 3. Graceful Fallback to Bridge / Providers if CLI was uninstalled or failed
-    if (!reply) {
-      engineSource = 'bridge';
+    // 3. Dispatch through the bridge -- the only way an agent is ever run.
+    let dispatchedAgent = agentKey;
+    try {
+      const res = await fetch(bridgeUrl('/api/chat/send'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          message,
+          agentId: typeof agentId === 'string' ? agentId : undefined,
+          model: typeof model === 'string' ? model : undefined,
+          chatId: currentSessionId,
+        }),
+        signal: AbortSignal.timeout(BRIDGE_REQUEST_TIMEOUT_MS),
+      });
+
+      const data = (await res.json().catch(() => null)) as
+        | { success?: boolean; ok?: boolean; agent?: string; error?: string }
+        | null;
+
+      // The bridge refuses with a non-2xx when the LLM_SPAWN_ENABLED kill
+      // switch is active, when the token is wrong, etc. Report its reason.
+      if (!res.ok || data?.ok === false || data?.success === false) {
+        return failureResponse(
+          {
+            reason: 'bridge_rejected',
+            error:
+              (data && typeof data.error === 'string' && data.error) ||
+              `Bridge rejected the dispatch with HTTP ${res.status}.`,
+            status: res.ok ? 502 : res.status,
+          },
+          currentSessionId
+        );
+      }
+
+      if (typeof data?.agent === 'string' && data.agent) dispatchedAgent = data.agent;
+    } catch (err) {
+      return failureResponse(toBridgeFailure(err, 'dispatch the message'), currentSessionId);
+    }
+
+    // 4. Wait for the agent's REAL reply to appear in the bridge history.
+    const deadline = Date.now() + REPLY_TIMEOUT_MS;
+    let reply = '';
+    let replyAgent = dispatchedAgent;
+
+    while (Date.now() < deadline) {
+      await sleep(REPLY_POLL_INTERVAL_MS);
+
+      let turns: BridgeTurn[];
       try {
-        const bridgeRes = await fetch(bridgeUrl('/api/chat/send'), {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ message, agentId, model, chatId: currentSessionId }),
-        });
+        turns = await fetchAssistantTurns(currentSessionId);
+      } catch (err) {
+        return failureResponse(toBridgeFailure(err, 'read the agent reply'), currentSessionId);
+      }
 
-        if (bridgeRes.ok) {
-          const data = await bridgeRes.json();
-          reply = data.reply || data.text || '';
-        }
-      } catch (bridgeErr) {
-        console.warn('[AgenticOS] Bridge fallback error:', bridgeErr);
+      if (turns.length > baselineReplyCount) {
+        const latest = turns[turns.length - 1];
+        reply = String(latest.content).trim();
+        if (typeof latest.source === 'string' && latest.source) replyAgent = latest.source;
+        break;
       }
     }
 
-    // 4. Intelligent Default if all engines fail
     if (!reply) {
-      reply = `[${agentName || agentId}] System online. Received instruction: "${message}". Processed and logged to Obsidian session ${currentSessionId}.`;
-      engineSource = 'system';
+      return failureResponse(
+        {
+          reason: 'reply_timeout',
+          error:
+            `The message was dispatched to "${dispatchedAgent}" through the bridge, but no reply was ` +
+            `recorded within ${Math.round(REPLY_TIMEOUT_MS / 1000)}s. The agent may still be working -- ` +
+            `check the bridge. No agent reply was written to Obsidian.`,
+          status: 504,
+        },
+        currentSessionId
+      );
     }
 
-    // 5. Log Agent Reply to Obsidian
-    appendChatToObsidian(agentName || agentId, 'agent', reply);
-    saveSessionMessage(agentId, currentSessionId, 'agent', reply, agentName || agentId);
+    // 5. Log the REAL agent reply to Obsidian.
+    const replyDisplayName =
+      typeof agentName === 'string' && agentName ? agentName : replyAgent;
+    appendChatToObsidian(replyDisplayName, 'agent', reply);
+    saveSessionMessage(agentKey, currentSessionId, 'agent', reply, replyDisplayName);
 
     return NextResponse.json({
       ok: true,
       reply,
       sessionId: currentSessionId,
-      source: engineSource,
+      agent: replyAgent,
+      source: 'bridge',
       timestamp: Date.now(),
       savedToObsidian: true,
     });
-  } catch (error: any) {
-    return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
+  } catch (error: unknown) {
+    const detail = error instanceof Error ? error.message : String(error);
+    console.error('[AgenticOS] chat route internal error:', detail);
+    return NextResponse.json(
+      {
+        ok: false,
+        reason: 'internal_error' satisfies FailureReason,
+        error: detail,
+        sessionId: currentSessionId,
+        savedToObsidian: false,
+      },
+      { status: 500 }
+    );
   }
 }

@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- AMOLED true black + the web UI's blue accents. Kept in sync with
+         ui/theme/Color.kt; these are only used by the XML launch theme and
+         the adaptive launcher icon. -->
+    <color name="amoled_black">#FF000000</color>
+    <color name="accent_blue">#FF2563EB</color>
+    <color name="accent_sky">#FF38BDF8</color>
+    <color name="ic_launcher_background">#FF000000</color>
+</resources>

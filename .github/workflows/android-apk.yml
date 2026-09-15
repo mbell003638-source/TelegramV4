@@ -1,0 +1,100 @@
+# Builds an installable debug APK from the android/ Gradle project and
+# uploads it as a downloadable workflow artifact. This exists because the
+# Android SDK is almost certainly not installed on the developer's machine,
+# so `./gradlew assembleDebug` cannot be run locally — GitHub Actions is the
+# reliable way to turn a push into a real .apk file.
+name: Android APK Build
+
+on:
+  push:
+    branches:
+      - main
+      - master
+      - "feat/**"
+    paths:
+      - "android/**"
+      - ".github/workflows/android-apk.yml"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build debug APK
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # The android/ Gradle project is being built out in parallel with this
+      # workflow and may not exist in every commit yet. Detect that instead
+      # of failing red. Accept either the Kotlin DSL (settings.gradle.kts,
+      # the modern Android Studio default) or the Groovy DSL
+      # (settings.gradle), since it isn't final which one lands.
+      - name: Check for Android project
+        id: check-android
+        shell: bash
+        run: |
+          if [ -f "android/settings.gradle.kts" ] || [ -f "android/settings.gradle" ]; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "Android project found — proceeding with the build."
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::android/settings.gradle(.kts) not found — skipping the APK build for this run. This is expected until the Android app scaffold lands; the job will finish successfully with nothing built."
+          fi
+
+      - name: Set up JDK 17
+        if: steps.check-android.outputs.exists == 'true'
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+
+      - name: Set up Android SDK
+        if: steps.check-android.outputs.exists == 'true'
+        uses: android-actions/setup-android@v3
+
+      # The repo cannot contain the binary gradle-wrapper.jar, so the
+      # wrapper may or may not be committed. Handle both: generate it when
+      # missing, and normalize line endings when it was checked out (in case
+      # it was committed from a Windows machine with CRLF endings, which
+      # would break the "#!/usr/bin/env sh" shebang on this Linux runner).
+      - name: Ensure Gradle wrapper exists
+        if: steps.check-android.outputs.exists == 'true'
+        working-directory: android
+        shell: bash
+        run: |
+          set -e
+          if [ -f "./gradlew" ]; then
+            echo "Gradle wrapper already present."
+          else
+            echo "gradlew not found in android/ — generating the Gradle wrapper."
+            PINNED_VERSION=""
+            if [ -f "gradle/wrapper/gradle-wrapper.properties" ]; then
+              PINNED_VERSION="$(sed -n 's/.*gradle-\([0-9][0-9.]*\)-\(all\|bin\)\.zip.*/\1/p' gradle/wrapper/gradle-wrapper.properties | head -n1)"
+            fi
+            if [ -n "$PINNED_VERSION" ]; then
+              echo "Using Gradle version $PINNED_VERSION pinned in gradle-wrapper.properties"
+              gradle wrapper --gradle-version "$PINNED_VERSION"
+            else
+              echo "No pinned Gradle version found — using the runner's default Gradle installation"
+              gradle wrapper
+            fi
+          fi
+          sed -i 's/\r$//' ./gradlew
+          chmod +x ./gradlew
+
+      - name: Build debug APK
+        if: steps.check-android.outputs.exists == 'true'
+        working-directory: android
+        run: ./gradlew assembleDebug --no-daemon --stacktrace
+
+      - name: Upload debug APK
+        if: steps.check-android.outputs.exists == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-debug-apk
+          path: android/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error

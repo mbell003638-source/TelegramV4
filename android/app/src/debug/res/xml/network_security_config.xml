@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  DEBUG BUILD ONLY. This file overlays the release policy in
+  app/src/main/res/xml/network_security_config.xml (AGP resource overlay:
+  src/debug/res wins over src/main/res for the debug build type).
+
+  A debug APK is the one you sideload to talk to a gateway on your own LAN, and
+  Android's config cannot express "any 192.168.x.x", so cleartext is permitted
+  generally HERE and only here. The release build keeps deny-by-default, which
+  is what forces a public VPS origin onto https://.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true" />
+</network-security-config>

@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Launch/window theme only; all in-app colour comes from Compose
+         Material 3 (ui/theme/Theme.kt). Parent is the platform Material theme
+         so no AppCompat / material-components dependency is required. -->
+    <style name="Theme.AgentOS" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/amoled_black</item>
+        <item name="android:statusBarColor">@color/amoled_black</item>
+        <item name="android:navigationBarColor">@color/amoled_black</item>
+        <item name="android:colorAccent">@color/accent_blue</item>
+    </style>
+</resources>
