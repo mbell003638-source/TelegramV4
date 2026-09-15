@@ -179,6 +179,13 @@ class GatewayClient {
                 if (code !in 200..299) {
                     throw statusException(code, readAllQuietly(conn.errorStream), label)
                 }
+                // The gateway's first write is `: connected`, an SSE COMMENT,
+                // which the loop below deliberately ignores - so without this
+                // there is no signal at all that the stream actually opened,
+                // and an idle gateway would be indistinguishable from a hung
+                // one. Emitting it here is not a guess: the 2xx response line
+                // has already been read off the socket at this point.
+                trySend(StreamEvent(EVENT_STREAM_OPEN, ""))
                 BufferedReader(InputStreamReader(conn.inputStream, Charsets.UTF_8)).use { reader ->
                     var name = "message"
                     val data = StringBuilder()
@@ -605,6 +612,15 @@ class GatewayClient {
     companion object {
         const val DEFAULT_ADB_PORT = 5555
         const val DEFAULT_GATEWAY_PORT = 3141
+
+        /**
+         * Synthetic [StreamEvent] name emitted once, by this client, the moment
+         * GET /api/chat/stream answers 2xx. The gateway never sends an event by
+         * this name - MissionControl.broadcast() names are plain words like
+         * `assistant_message`, so the leading underscores cannot collide.
+         */
+        const val EVENT_STREAM_OPEN = "__stream_open"
+
         private const val CONNECT_TIMEOUT_MS = 8_000
         private const val READ_TIMEOUT_MS = 25_000
         private const val USER_AGENT = "AgentOSClient/1.0 (Android)"

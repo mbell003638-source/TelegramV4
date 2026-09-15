@@ -33,6 +33,9 @@ const DEFAULT_VERSION_TIMEOUT_MS = 5000;
 const WIN_EXTS = ['.cmd', '.exe', '.ps1', '.bat', '.com', ''];
 // Extensions we know how to strip when generating sibling variants.
 const WIN_KNOWN_EXTS = ['.cmd', '.exe', '.ps1', '.bat', '.com'];
+// The Windows path separator, kept as a named constant so a lone backslash
+// never has to be escaped inline in a comparison.
+const WIN_SEP = path.win32.sep;
 
 // ---------------------------------------------------------------------------
 //  Catalogue of known agent CLIs.
@@ -654,15 +657,14 @@ class AgentDiscovery {
      * caller may ask "what would this look like on linux?" — while `env.PATH`
      * and `fs` are always the real host's. Splitting a Windows PATH on ':'
      * because the simulated platform is POSIX shears the drive letter off
-     * every entry ("C:\Users\x" becomes "C" + "\Users\x"), and the
-     * remainder is not garbage — it silently resolves against the current
-     * drive, and doubled it reads as a UNC share. Hence:
+     * every entry ("C:\Users\x" -> "C" plus "\Users\x"), and the remainder is
+     * not harmless garbage: it silently resolves against the current drive,
+     * and doubled it reads as a UNC share. Hence:
      *
-     *   - ';' always separates (it is never legal inside a Windows path, and
-     *     it is `path.delimiter` on a Windows host);
-     *   - ':' separates too — it is `path.delimiter` on a POSIX host — except
-     *     where it cannot be anything but a drive designator ("C:", "C:\x",
-     *     "C:/x"), which we only ever protect where drive letters are real.
+     *   - ';' always separates. It is never legal inside a Windows path, and
+     *     it is `path.delimiter` on a Windows host.
+     *   - ':' separates too (it is `path.delimiter` on a POSIX host) EXCEPT
+     *     where it can only be a drive designator: "C:", "C:\x", "C:/x".
      */
     _splitPathList(raw) {
         const text = raw == null ? '' : String(raw);
@@ -684,11 +686,12 @@ class AgentDiscovery {
 
     /** True when text[i] (a ':') is the colon of a "C:" drive designator. */
     _isDriveColon(text, i, current) {
-        // Drive letters exist on a Windows host, and in a simulated win32 run.
-        if (!this.isWin && path.sep !== '\') return false;
+        // Drive letters are real on a Windows host, and in a simulated win32
+        // run. Everywhere else a colon is unambiguously a list separator.
+        if (!this.isWin && path.sep !== WIN_SEP) return false;
         if (!/^[A-Za-z]$/.test(current)) return false;   // must be a lone letter
         const next = text[i + 1];
-        return next === undefined || next === '\' || next === '/' || next === ';';
+        return next === undefined || next === WIN_SEP || next === '/' || next === ';';
     }
 
     _binNames(entry) {
@@ -700,35 +703,82 @@ class AgentDiscovery {
     // =======================================================================
 
     /**
-     * execFile with a hard watchdog. Resolves { stdout, stderr, error } and
-     * never rejects, so a CLI that hangs, banners, or exits non-zero can never
-     * stall or break a scan.
+     * Every child we start is bounded by the instance budget. A per-call
+     * timeout may ask for LESS than `versionTimeoutMs`, never for more:
+     * `versionTimeoutMs` is the caller's contract for how long this scan may
+     * spend on any one process, and an auxiliary probe (`where`, `npm root -g`)
+     * that quietly outlived it is exactly how a "bounded" scan configured with
+     * a 60ms budget ends up taking nine seconds.
      */
-    _run(file, args, { timeout = this.versionTimeoutMs, cwd } = {}) {
+    _boundedTimeout(requested) {
+        const ceiling = Number.isFinite(this.versionTimeoutMs) && this.versionTimeoutMs > 0
+            ? this.versionTimeoutMs
+            : DEFAULT_VERSION_TIMEOUT_MS;
+        const want = Number.isFinite(requested) && requested > 0 ? requested : ceiling;
+        return Math.max(1, Math.min(want, ceiling));
+    }
+
+    /**
+     * Abandon a child we have already stopped waiting for: SIGTERM, then
+     * SIGKILL for one that ignores it. Nothing downstream waits on either — the
+     * promise is long since resolved — and the escalation timer is unref'd, so
+     * a dying probe can never hold the process (or a test run) open.
+     */
+    _killChild(child, graceMs = 500) {
+        if (!child || typeof child.kill !== 'function') return;
+        if (child.killed || child.exitCode != null || child.signalCode) return;
+        try { child.kill('SIGTERM'); } catch (e) { /* already gone */ }
+        const hard = setTimeout(() => {
+            try {
+                if (child.exitCode == null && !child.signalCode) child.kill('SIGKILL');
+            } catch (e) { /* already gone */ }
+        }, Math.max(50, graceMs));
+        if (typeof hard.unref === 'function') hard.unref();
+    }
+
+    /**
+     * execFile with an authoritative watchdog. Resolves { stdout, stderr, error }
+     * and never rejects, so a CLI that hangs, banners, or exits non-zero can
+     * never stall or break a scan.
+     *
+     * The timer — not the child's `close` event — settles the promise. A child
+     * that ignores SIGTERM, or one whose callback simply never fires, therefore
+     * cannot hold the scan open: we resolve on the timer path first and only
+     * then go and kill the process. Waiting on `close` after the deadline is
+     * precisely the bug this shape exists to prevent.
+     */
+    _run(file, args, { timeout, cwd, windowsVerbatimArguments = false } = {}) {
+        const budget = this._boundedTimeout(timeout);
         return new Promise((resolve) => {
             let settled = false;
             let timer = null;
+            let child = null;
             const done = (result) => {
                 if (settled) return;
                 settled = true;
-                if (timer) clearTimeout(timer);
+                if (timer) { clearTimeout(timer); timer = null; }
                 resolve(result);
             };
-            timer = setTimeout(
-                () => done({ stdout: '', stderr: '', error: new Error(`timed out after ${timeout}ms`) }),
-                timeout + 250
-            );
+            timer = setTimeout(() => {
+                done({ stdout: '', stderr: '', error: new Error(`timed out after ${budget}ms`) });
+                this._killChild(child, budget);
+            }, budget);
             try {
-                this.execFileImpl(file, args, {
+                child = this.execFileImpl(file, args, {
                     encoding: 'utf8',
                     windowsHide: true,
-                    timeout,
+                    // Hand-quoted `cmd /d /s /c "..."` argv must reach cmd.exe
+                    // byte for byte; see _cmdShimArgs.
+                    windowsVerbatimArguments,
+                    timeout: budget,
                     maxBuffer: 1024 * 1024,
                     env: { ...process.env, ...this.env },
                     cwd,
                 }, (error, stdout, stderr) => {
                     done({ stdout: stdout || '', stderr: stderr || '', error: error || null });
                 });
+                // The watchdog may already have fired while we were spawning.
+                if (settled) this._killChild(child, budget);
             } catch (e) {
                 done({ stdout: '', stderr: '', error: e });
             }
@@ -740,6 +790,15 @@ class AgentDiscovery {
      * `cmd.exe /d /s /c` with the whole command inside one outer-quoted
      * argument means a path containing a space or an `&` is data, never
      * syntax. A path carrying a double quote is refused outright.
+     *
+     * This argument is already exactly quoted, so it MUST travel with
+     * `windowsVerbatimArguments: true`. Without it libuv re-escapes our quotes
+     * on the way to the command line — `""C:\dir\foo.cmd" ...` arrives as
+     * `\"\"C:\dir\foo.cmd" ...` — and cmd.exe, which has no notion of a
+     * backslash-escaped quote, reads the two leading backslashes as the start
+     * of a UNC share and fails with "The network path was not found."
+     * Verbatim argv is not a shell: there is still no command string we
+     * concatenated, and nothing here is interpreted by a shell we invoked.
      */
     _cmdShimArgs(binaryPath, args) {
         if (binaryPath.includes('"')) return null;
@@ -859,15 +918,20 @@ class AgentDiscovery {
 
             let file = binaryPath;
             let args = Array.isArray(versionArgs) ? versionArgs : ['--version'];
+            let verbatim = false;
             if (this.isWin && (ext === '.cmd' || ext === '.bat')) {
                 // A batch shim cannot be execFile'd directly on modern Node.
                 const shimArgs = this._cmdShimArgs(binaryPath, args);
                 if (!shimArgs) return { version: null, error: 'refusing unsafe path (contains a quote)' };
                 file = this.env.COMSPEC || process.env.COMSPEC || 'cmd.exe';
                 args = shimArgs;
+                verbatim = true;   // see _cmdShimArgs: the quoting is already exact
             }
 
-            const res = await this._run(file, args, { timeout: this.versionTimeoutMs });
+            const res = await this._run(file, args, {
+                timeout: this.versionTimeoutMs,
+                windowsVerbatimArguments: verbatim,
+            });
             const version = this._parseVersion(`${res.stdout || ''}\n${res.stderr || ''}`);
             if (version) return { version, error: null };
             if (res.error) return { version: null, error: `version probe failed: ${res.error.message}` };

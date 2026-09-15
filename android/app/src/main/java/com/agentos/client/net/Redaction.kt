@@ -13,11 +13,15 @@ package com.agentos.client.net
  * Referenced by UiState.asErrorState() and by GatewayClient.
  */
 
+// Both patterns MUST be raw strings. In a normal Kotlin string literal `\s` is
+// an illegal escape (a compile error) and `\b` is the backspace character
+// rather than a regex word boundary — so the regex source must reach Regex()
+// without passing through Kotlin's escape processing at all.
 private val SECRET_QUERY_PARAM = Regex(
-    "(?i)\b(token|apikey|api_key|access_token|auth|secret|password|key)=([^&\s\"'<>]+)"
+    """(?i)\b(token|apikey|api_key|access_token|auth|secret|password|key)=([^&\s"'<>]+)"""
 )
 
-private val BEARER_HEADER = Regex("(?i)\bbearer\s+[A-Za-z0-9._~+/=-]+")
+private val BEARER_HEADER = Regex("""(?i)\bbearer\s+[A-Za-z0-9._~+/=-]+""")
 
 /** Replace anything that looks like a credential with `***`. Never throws. */
 fun scrubSecrets(text: String): String = try {
