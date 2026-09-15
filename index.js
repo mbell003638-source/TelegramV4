@@ -114,6 +114,10 @@ const AgentDelegation = require('./core/AgentDelegation');
 const Council = require('./core/Council');
 const InstanceSync = require('./core/InstanceSync');
 const SkillRegistry = require('./core/SkillRegistry');
+const GoalEngine = require('./core/GoalEngine');
+const QuotaTracker = require('./core/QuotaTracker');
+const MeetingBot = require('./core/MeetingBot');
+const AgentDiscovery = require('./core/AgentDiscovery');
 const { globalHermesEngine } = require('./core/HermesToolEngine');
 const { runImprovement, IMPROVE_AGENT_ID } = require('./core/RouterRoutes');
 
@@ -255,6 +259,37 @@ async function main() {
         sharedSecret: process.env.INSTANCE_SHARED_SECRET || null,
     });
 
+    // 4k. Quota tracking. This app runs on subscriptions with session and
+    //     weekly limits, not per-token billing, so knowing which provider
+    //     still has headroom matters more than knowing what it cost.
+    const quota = new QuotaTracker({ database, baseDir: config.baseDir });
+
+    // 4l. Goal engine: the spine. A goal persists across sessions and is
+    //     advanced one step at a time, so progress is durable and
+    //     observable rather than trapped inside one long call.
+    const goals = new GoalEngine({
+        database,
+        planner: taskPlanner,
+        delegation,
+        council,
+        memorySearch,
+        skills,
+    });
+
+    // 4m. Meeting bot. Refuses to pretend: with no RECALL_API_KEY it reports
+    //     that it is unconfigured rather than claiming an agent joined.
+    const meetingBot = new MeetingBot({
+        apiKey: process.env.RECALL_API_KEY || null,
+        database,
+        memorySearch,
+        webhookSecret: process.env.RECALL_WEBHOOK_SECRET || null,
+    });
+
+    // 4n. Discover every agent CLI installed on this machine, not just the
+    //     eight registered above. Detected-but-unsupported ones are still
+    //     reported, because knowing a tool is present is useful.
+    const discovery = new AgentDiscovery({});
+
     const dashboardPort = Number(process.env.DASHBOARD_PORT) || 3141;
     const dashboardToken = process.env.DASHBOARD_TOKEN || 'admin';
     const missionControl = new MissionControlServer({
@@ -276,6 +311,10 @@ async function main() {
         council,
         instanceSync,
         skills,
+        goals,
+        quota,
+        meetingBot,
+        discovery,
     });
     await missionControl.start().catch((err) => {
         console.warn(`[MissionControl] Could not bind port ${dashboardPort}: ${err.message}`);
@@ -320,6 +359,16 @@ async function main() {
     // missionControl's kill switches.
     missionControl.scheduler = scheduler;
     council.killSwitches = missionControl.killSwitches;
+
+    // Goals make progress on the scheduler rather than in a long-lived loop,
+    // so a restart never loses one mid-flight.
+    if (typeof goals.registerWithScheduler === 'function') {
+        try {
+            goals.registerWithScheduler(scheduler);
+        } catch (err) {
+            console.warn(`[GoalEngine] Could not register with scheduler: ${err.message}`);
+        }
+    }
 
     // The Hermes tool engine was previously referenced only from a test file.
     // Wire its orchestration tools to the real collaborators. Each agent CLI
@@ -397,6 +446,20 @@ async function main() {
     console.log(`   Syncthing: ${syncthing.isConfigured ? 'configured' : 'not configured (set SYNCTHING_API_KEY)'}`);
     console.log(`   Skills: ${skills.stats().count} registered`);
     console.log(`   Peers: ${instanceSync.listPeers().length} instance(s) paired`);
+    try {
+        const g = goals.summary();
+        console.log(`   Goals: ${g.total || 0} tracked`);
+    } catch (e) { /* summary is cosmetic */ }
+    console.log(`   Meeting bot: ${meetingBot.isConfigured ? 'configured' : 'not configured (set RECALL_API_KEY)'}`);
+    // Discovery runs in the background: probing every CLI for a version is
+    // slow, and nothing above depends on the result.
+    discovery.scan({ withVersion: false })
+        .then((found) => {
+            const installed = found.filter((a) => a.installed);
+            const extra = installed.filter((a) => !a.supported).map((a) => a.id);
+            console.log(`   Agent CLIs found: ${installed.length}` + (extra.length ? ` (detected without an adapter: ${extra.join(', ')})` : ''));
+        })
+        .catch((err) => console.warn(`[AgentDiscovery] scan failed: ${err.message}`));
 
     // Stop the scheduler cleanly so an in-flight task is not orphaned.
     for (const sig of ['SIGINT', 'SIGTERM']) {

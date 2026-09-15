@@ -18,9 +18,10 @@ const KillSwitches = require('./KillSwitches');
 const ExfiltrationGuard = require('./ExfiltrationGuard');
 const { getDeviceAutomation } = require('./DeviceAutomation');
 const { handleRouterRoutes } = require('./RouterRoutes');
+const { handleSwarmRoutes } = require('./SwarmRoutes');
 
 class MissionControlServer {
-    constructor({ database, sessionStore, actionExecutor, agents, port = 3141, token = null, providerRouter = null, providerRegistry = null, agentOverrides = null, memorySearch = null, taskPlanner = null, scheduler = null, selfImprovement = null, upstreamWatch = null, syncthing = null, delegation = null, council = null, instanceSync = null, skills = null }) {
+    constructor({ database, sessionStore, actionExecutor, agents, port = 3141, token = null, providerRouter = null, providerRegistry = null, agentOverrides = null, memorySearch = null, taskPlanner = null, scheduler = null, selfImprovement = null, upstreamWatch = null, syncthing = null, delegation = null, council = null, instanceSync = null, skills = null, goals = null, quota = null, meetingBot = null, discovery = null }) {
         this.db = database;
         this.sessionStore = sessionStore;
         this.actionExecutor = actionExecutor;
@@ -45,6 +46,10 @@ class MissionControlServer {
         this.council = council;
         this.instanceSync = instanceSync;
         this.skills = skills;
+        this.goals = goals;
+        this.quota = quota;
+        this.meetingBot = meetingBot;
+        this.discovery = discovery;
         // Set by index.js when the WhatsApp Cloud API channel is configured.
         this.whatsappWebhook = null;
         // OmniRouter OpenAI-compatible surface (/v1/*), gated by its own master key.
@@ -227,6 +232,7 @@ class MissionControlServer {
             // of those match on a prefix (e.g. startsWith('/api/memories')) and
             // would otherwise shadow these exact paths.
             if (await handleRouterRoutes(this, req, res, pathname, query)) return;
+            if (await handleSwarmRoutes(this, req, res, pathname, query)) return;
 
             // 1. Status & System Info
             if (pathname === '/api/info' || pathname === '/api/status' || pathname === '/api/health') {
