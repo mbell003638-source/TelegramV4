@@ -131,3 +131,40 @@ porting their **capabilities**, reimplemented natively in this stack.
 ---
 
 *Baseline on arrival: 50 tests. Now: 125, all passing.*
+
+---
+
+## Feature inventory — nothing was removed
+
+Verified by booting the app and calling every feature endpoint. **38 live, 0
+missing or broken.**
+
+| Group | Endpoints |
+|---|---|
+| Core / dashboard | `/api/info`, `/api/agents`, `/api/status`, `/api/summary` |
+| **War Room** | `/api/warroom/voices`, `/standup-data`, `/standup`, `/discuss`, `/message` |
+| **Meetings** | `/api/meetings`, `/api/meetings/dispatch`, `/save-notes` |
+| Hive mind / memory | `/api/hive-mind`, `/api/memories/pinned`, `/list`, `/search`, `/reindex` |
+| Tasks / kanban / scheduler | `/api/tasks`, `/api/mission/tasks`, `/api/scheduler/tasks` |
+| OmniRouter + per-agent toggle | `/api/router/providers`, `/usage`, `/health`, `/key`, `/api/agents/override` |
+| Devices (phone + TV) | `/api/devices`, `/api/devices/remote`, `/api/devices/action` |
+| Safety | `/api/killswitches`, `/api/audit-log`, `/api/exfil-guard`, `/api/suggestions` |
+| Planner / improve / upstream / sync | `/api/planner/plan`, `/api/improve`, `/api/upstream`, `/api/sync` |
+| Satellite / settings / tokens | `/api/satellite/status`, `/api/settings/providers`, `/api/tokens`, `/api/concurrency` |
+
+### What was deleted, and why it cost no feature
+
+| Deleted | Lines | Imported by | Feature still served by |
+|---|---|---|---|
+| `core/WarRoom.js` | 166 | nothing | `MissionControl._queryCouncilDeliberation()` / `_getLiveStandupData()`, which query **real** agents |
+| `core/HiveMind.js` | 616 | nothing | `core/Database.js` (it duplicated 7 of 9 tables against a second sqlite file) |
+| `core/DashboardServer.js` | 664 | nothing | `core/MissionControl.js` |
+
+`WarRoom.js` was worth removing on its own merits: `getStandupUpdate()` and
+`getDiscussPerspective()` returned **hardcoded prose** — invented agent
+statements presented as genuine output — against a roster that did not even
+match the real agent keys.
+
+The only deliberate feature removal was the **all-agents master toggle**, taken
+out on request ("each agent should have their individual toggle i dont want one
+switch for all"). Per-agent toggles are live at `/api/agents/override`.
