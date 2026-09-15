@@ -109,6 +109,7 @@ const MemorySearch = require('./core/MemorySearch');
 const TaskPlanner = require('./core/TaskPlanner');
 const SelfImprovementEngine = require('./core/SelfImprovement');
 const UpstreamWatch = require('./core/UpstreamWatch');
+const SyncthingBridge = require('./core/SyncthingBridge');
 const { runImprovement, IMPROVE_AGENT_ID } = require('./core/RouterRoutes');
 
 // Agent implementations
@@ -204,6 +205,20 @@ async function main() {
     });
     const upstreamWatch = new UpstreamWatch({ baseDir: config.baseDir });
 
+    // 4f. Syncthing: replicate the vault and memory store between setups,
+    //     peer to peer. The API key is read from the env, or discovered
+    //     from a local Syncthing config.xml so a normal install needs no
+    //     manual copying.
+    let syncthingKey = process.env.SYNCTHING_API_KEY || null;
+    if (!syncthingKey) {
+        const found = SyncthingBridge.discoverApiKey();
+        if (found) {
+            syncthingKey = found.apiKey;
+            console.log(`[Syncthing] API key discovered in ${found.configPath}`);
+        }
+    }
+    const syncthing = new SyncthingBridge({ apiKey: syncthingKey });
+
     const dashboardPort = Number(process.env.DASHBOARD_PORT) || 3141;
     const dashboardToken = process.env.DASHBOARD_TOKEN || 'admin';
     const missionControl = new MissionControlServer({
@@ -220,6 +235,7 @@ async function main() {
         taskPlanner,
         selfImprovement,
         upstreamWatch,
+        syncthing,
     });
     await missionControl.start().catch((err) => {
         console.warn(`[MissionControl] Could not bind port ${dashboardPort}: ${err.message}`);
@@ -323,6 +339,7 @@ async function main() {
     if (whatsapp) console.log('   Channels: Telegram + WhatsApp + Web');
     console.log(`   Memory recall: ${memorySearch.stats().mode} (${memorySearch.stats().indexed} indexed)`);
     console.log('   Scheduler: running');
+    console.log(`   Syncthing: ${syncthing.isConfigured ? 'configured' : 'not configured (set SYNCTHING_API_KEY)'}`);
 
     // Stop the scheduler cleanly so an in-flight task is not orphaned.
     for (const sig of ['SIGINT', 'SIGTERM']) {

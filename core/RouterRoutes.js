@@ -425,6 +425,61 @@ async function handleRouterRoutes(ctx, req, res, pathname, query) {
         }
     }
 
+    // --- Syncthing: keep the shared brain identical across machines ---
+    if (pathname === '/api/sync') {
+        if (!ctx.syncthing) {
+            ctx._sendJson(res, 503, { error: 'Syncthing bridge not configured' });
+            return true;
+        }
+
+        if (req.method === 'GET') {
+            // overview() never throws; an unreachable daemon is reported, not an error.
+            ctx._sendJson(res, 200, await ctx.syncthing.overview());
+            return true;
+        }
+
+        if (req.method === 'POST' || req.method === 'PATCH') {
+            const body = await ctx._readBody(req);
+            const action = String(body.action || '').trim();
+            try {
+                let result;
+                switch (action) {
+                    case 'add-device':
+                        // The device ID must come from the operator. A pairing
+                        // request is never auto-accepted: trusting an unknown
+                        // ID would hand a stranger the whole vault.
+                        result = await ctx.syncthing.addDevice(body.deviceId, body.name, body.addresses);
+                        break;
+                    case 'share-folder':
+                        result = await ctx.syncthing.shareFolder(body.folderId, body.deviceId);
+                        break;
+                    case 'rescan':
+                        result = await ctx.syncthing.rescan(body.folderId || null);
+                        break;
+                    case 'pause':
+                        result = await ctx.syncthing.setPaused(body.folderId, true);
+                        break;
+                    case 'resume':
+                        result = await ctx.syncthing.setPaused(body.folderId, false);
+                        break;
+                    default:
+                        ctx._sendJson(res, 400, {
+                            error: `Unknown sync action "${action}". `
+                                + 'Expected add-device, share-folder, rescan, pause or resume.',
+                        });
+                        return true;
+                }
+                ctx.db.logAudit('sync', action, 'syncthing_action',
+                    `Syncthing ${action}: ${JSON.stringify(result).slice(0, 200)}`, false);
+                ctx.broadcast('sync.changed', { action, result });
+                ctx._sendJson(res, 200, { ok: true, action, result });
+            } catch (err) {
+                ctx._sendJson(res, 400, { ok: false, action, error: err.message });
+            }
+            return true;
+        }
+    }
+
     return false;
 }
 
